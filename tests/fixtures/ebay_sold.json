@@ -1,0 +1,10 @@
+{
+  "itemSales": [
+    {"title": "Apple iPhone 12 A2403", "lastSoldPrice": {"value": "300.00", "currency": "GBP"}},
+    {"title": "Apple iPhone 12 A2403", "lastSoldPrice": {"value": "350.00", "currency": "GBP"}},
+    {"title": "Apple iPhone 12 A2403", "lastSoldPrice": {"value": "400.00", "currency": "GBP"}},
+    {"title": "Apple iPhone 12 A2403", "lastSoldPrice": {"value": "360.00", "currency": "GBP"}},
+    {"title": "Apple iPhone 12 A2403", "lastSoldPrice": {"value": "340.00", "currency": "GBP"}}
+  ],
+  "total": 5
+}
