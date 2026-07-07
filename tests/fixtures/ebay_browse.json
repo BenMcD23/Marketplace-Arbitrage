@@ -1,0 +1,24 @@
+{
+  "itemSummaries": [
+    {
+      "itemId": "v1|123456789|0",
+      "title": "Apple iPhone 12 A2403 128GB Blue Unlocked",
+      "price": {"value": "220.00", "currency": "GBP"},
+      "condition": "Used",
+      "conditionId": "3000",
+      "shippingOptions": [{"shippingCost": {"value": "3.99", "currency": "GBP"}}],
+      "itemWebUrl": "https://www.ebay.co.uk/itm/123456789",
+      "image": {"imageUrl": "https://i.ebayimg.com/img.jpg"},
+      "itemLocation": {"city": "London", "postalCode": "E1", "country": "GB"}
+    },
+    {
+      "itemId": "v1|987654321|0",
+      "title": "Sony WH-1000XM4 Wireless Headphones",
+      "price": {"value": "150.00", "currency": "GBP"},
+      "conditionId": "1000",
+      "shippingOptions": [{"shippingCost": {"value": "0.00", "currency": "GBP"}}],
+      "itemWebUrl": "https://www.ebay.co.uk/itm/987654321"
+    }
+  ],
+  "total": 2
+}

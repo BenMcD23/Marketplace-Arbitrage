@@ -1,0 +1,15 @@
+services:
+  arb:
+    build: .
+    image: electronics-arb:latest
+    container_name: electronics-arb
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Persist the SQLite db (deals, dedup, price cache) and scraper sessions.
+      - ./data:/app/data
+    # Default command runs the scheduler; override for one-off runs:
+    #   docker compose run --rm arb run --dry
+    #   docker compose run --rm arb stats
+    command: ["schedule", "--interval", "15"]
