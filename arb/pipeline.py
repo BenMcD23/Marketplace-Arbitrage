@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from alerts.telegram import TelegramAlerter
+from alerts.null import NullAlerter
 from arb.config import Settings
 from arb.db import Database
 from arb.logging_conf import get_logger
@@ -51,7 +51,7 @@ class Pipeline:
         settings: Settings,
         db: Database,
         oracle: PricingOracle,
-        alerter: TelegramAlerter,
+        alerter: NullAlerter,
     ):
         self.settings = settings
         self.db = db

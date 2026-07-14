@@ -1,7 +1,7 @@
 [project]
 name = "arb"
 version = "0.1.0"
-description = "Electronics arbitrage pipeline: scans marketplaces for underpriced electronics, values them against real resale data, and pushes profitable finds to Telegram."
+description = "Electronics arbitrage pipeline: scans marketplaces for underpriced electronics, values them against real resale data, and records profitable finds."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

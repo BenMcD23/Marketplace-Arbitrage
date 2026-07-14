@@ -5,7 +5,7 @@ Kept separate from the pipeline so tests can inject fakes and the CLI stays thin
 
 from __future__ import annotations
 
-from alerts.telegram import TelegramAlerter
+from alerts.null import NullAlerter
 from arb.config import Settings
 from arb.db import Database
 from arb.logging_conf import get_logger
@@ -60,5 +60,6 @@ def build_sources(settings: Settings) -> list[Source]:
     return sources
 
 
-def build_alerter(settings: Settings) -> TelegramAlerter:
-    return TelegramAlerter(settings)
+def build_alerter(settings: Settings) -> NullAlerter:
+    # Notifications are off for now — deals are stored, not pushed anywhere.
+    return NullAlerter(settings)

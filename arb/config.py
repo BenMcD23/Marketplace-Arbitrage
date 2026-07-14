@@ -44,12 +44,6 @@ class Settings(BaseSettings):
     # Keepa domain id: 1=US, 2=UK, 3=DE ... default UK to match EBAY_GB.
     keepa_domain: int = Field(default=2)
 
-    # --- Telegram ---
-    telegram_bot_token: str | None = None
-    telegram_chat_id: str | None = None
-    # Optional separate low-priority chat for "too good to be true" scam flags.
-    telegram_scam_chat_id: str | None = None
-
     # --- Deal thresholds ---
     min_profit: float = Field(default=25.0, description="Minimum £ profit to flag a deal.")
     min_roi: float = Field(default=30.0, description="Minimum ROI %.")

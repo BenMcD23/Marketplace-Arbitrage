@@ -1,3 +1,3 @@
-from alerts.telegram import TelegramAlerter, format_deal
+from alerts.null import NullAlerter
 
-__all__ = ["TelegramAlerter", "format_deal"]
+__all__ = ["NullAlerter"]

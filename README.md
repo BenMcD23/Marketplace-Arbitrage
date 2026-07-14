@@ -1,8 +1,8 @@
 # Electronics Arbitrage Bot
 
 A private, self-hosted pipeline that scans marketplaces for underpriced
-electronics, values them against real resale data, and pushes profitable finds
-to your phone via Telegram. No UI, no customers — the engineering is the moat.
+electronics, values them against real resale data, and records profitable finds.
+No UI, no customers — the engineering is the moat.
 
 ```
 Sources → Normaliser → Pricing Oracle → Deal Engine → Alerts
@@ -13,14 +13,14 @@ Sources → Normaliser → Pricing Oracle → Deal Engine → Alerts
 - **Normaliser** — extracts model numbers, cleans titles, standardises condition.
 - **Pricing Oracle** — eBay Sold median + Keepa (Amazon) = resale truth. Cached.
 - **Deal Engine** — applies the margin / ROI / profit formula, flags winners.
-- **Alerts** — pushes deals to Telegram (real deals + a separate scam-flag channel).
+- **Alerts** — notifications are off for now; deals are logged and stored in the DB.
 
 Core principle: sources are swappable, everything downstream never changes.
 
 ## Tech stack
 
 Python 3.12 · `uv` · SQLite · httpx · Pydantic · structlog · Playwright ·
-APScheduler · Telegram Bot API · Docker.
+APScheduler · Docker.
 
 ## Quick start
 
@@ -30,7 +30,7 @@ uv venv --python 3.12
 uv pip install -e ".[dev]"
 
 # 2. Configure
-cp .env.example .env      # fill in eBay / Keepa / Telegram keys + thresholds
+cp .env.example .env      # fill in eBay / Keepa keys + thresholds
 
 # 3. Run the test suite (fully offline — no live API calls)
 uv run pytest
@@ -87,6 +87,6 @@ arb/       config, models, db, logging, pipeline, factory, stats, cli
 sources/   base Source + normaliser + ebay + scraper_base + gumtree + fb
 oracle/    ebay_client, keepa_client, pricing (with SQLite cache + TTL)
 engine/    deals (fee model, channel selection, thresholds, scam filter)
-alerts/    telegram
+alerts/    null (no-op; notifications disabled)
 tests/     offline unit + integration tests (fixtures, respx, in-memory sqlite)
 ```
