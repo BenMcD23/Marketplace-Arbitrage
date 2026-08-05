@@ -1,4 +1,8 @@
-"""Reporting: read the deals table and summarise performance."""
+"""Reporting: read the deals table and summarise performance.
+
+Feeds both `arb stats` on the command line and the dashboard's overview cards,
+so the two can never disagree about what the numbers mean.
+"""
 
 from __future__ import annotations
 
@@ -9,13 +13,15 @@ def compute_stats(db: Database, days: int = 30) -> dict:
     since = f"-{days} days"
 
     total = db.query(
-        "SELECT COUNT(*) AS n, AVG(roi_pct) AS avg_roi, AVG(est_profit) AS avg_profit "
+        "SELECT COUNT(*) AS n, AVG(roi_pct) AS avg_roi, AVG(est_profit) AS avg_profit, "
+        "       AVG(expected_profit) AS avg_expected, SUM(expected_profit) AS sum_expected, "
+        "       AVG(confidence) AS avg_confidence, AVG(score) AS avg_score "
         "FROM deals WHERE is_scam_flag = 0 AND flagged_at >= datetime('now', ?)",
         (since,),
     )[0]
 
     per_day = db.query(
-        "SELECT date(flagged_at) AS d, COUNT(*) AS n "
+        "SELECT date(flagged_at) AS d, COUNT(*) AS n, SUM(expected_profit) AS profit "
         "FROM deals WHERE is_scam_flag = 0 AND flagged_at >= datetime('now', ?) "
         "GROUP BY d ORDER BY d DESC",
         (since,),
@@ -41,42 +47,90 @@ def compute_stats(db: Database, days: int = 30) -> dict:
         (since,),
     )[0]
 
+    # Data-health counters: how much of its own sold history the system has built.
+    coverage = db.query(
+        "SELECT "
+        " (SELECT COUNT(*) FROM sold_observations) AS sold_observations,"
+        " (SELECT COUNT(DISTINCT product_key) FROM sold_observations) AS sold_keys,"
+        " (SELECT COUNT(*) FROM comp_watch WHERE resolved = 0) AS comps_watched,"
+        " (SELECT COUNT(*) FROM valuations) AS valuations,"
+        " (SELECT COUNT(*) FROM valuations WHERE basis = 'sold') AS valuations_from_sold,"
+        " (SELECT COUNT(*) FROM listings) AS listings"
+    )[0]
+
     return {
         "window_days": days,
         "total_deals": total["n"] or 0,
-        "avg_roi": round(total["avg_roi"], 1) if total["avg_roi"] is not None else None,
-        "avg_profit": round(total["avg_profit"], 2) if total["avg_profit"] is not None else None,
+        "avg_roi": _round(total["avg_roi"], 1),
+        "avg_profit": _round(total["avg_profit"], 2),
+        "avg_expected_profit": _round(total["avg_expected"], 2),
+        "total_expected_profit": _round(total["sum_expected"], 2),
+        "avg_confidence": _round(total["avg_confidence"], 3),
+        "avg_score": _round(total["avg_score"], 1),
         "scam_flags": scams["n"] or 0,
-        "per_day": [{"date": r["d"], "deals": r["n"]} for r in per_day],
+        "per_day": [
+            {"date": r["d"], "deals": r["n"], "expected_profit": _round(r["profit"], 2)}
+            for r in per_day
+        ],
         "per_source": [
-            {"source": r["source"], "deals": r["deals"], "avg_roi": round(r["avg_roi"], 1) if r["avg_roi"] else None}
+            {"source": r["source"], "deals": r["deals"], "avg_roi": _round(r["avg_roi"], 1)}
             for r in per_source
         ],
         "per_channel": [
-            {"channel": r["channel"], "deals": r["deals"], "avg_profit": round(r["avg_profit"], 2) if r["avg_profit"] else None}
+            {
+                "channel": r["channel"],
+                "deals": r["deals"],
+                "avg_profit": _round(r["avg_profit"], 2),
+            }
             for r in per_channel
         ],
+        "data_health": {
+            "sold_observations": coverage["sold_observations"],
+            "sold_product_keys": coverage["sold_keys"],
+            "comps_watched": coverage["comps_watched"],
+            "valuations": coverage["valuations"],
+            "valuations_from_sold": coverage["valuations_from_sold"],
+            "listings": coverage["listings"],
+        },
     }
 
 
+def _round(value, places: int):
+    return round(value, places) if value is not None else None
+
+
 def format_stats(stats: dict) -> str:
+    def fmt(label: str, value, prefix: str = "") -> str:
+        shown = "n/a" if value is None else f"{prefix}{value}"
+        return f"{label:<22}: {shown}"
+
     lines = [
         f"=== Arbitrage stats (last {stats['window_days']} days) ===",
-        f"Total deals flagged : {stats['total_deals']}",
-        f"Avg ROI             : {stats['avg_roi']}%" if stats["avg_roi"] is not None else "Avg ROI             : n/a",
-        f"Avg profit          : £{stats['avg_profit']}" if stats["avg_profit"] is not None else "Avg profit          : n/a",
-        f"Scam flags          : {stats['scam_flags']}",
+        fmt("Total deals flagged", stats["total_deals"]),
+        fmt("Avg ROI", stats["avg_roi"], ""),
+        fmt("Avg profit", stats["avg_profit"], "£"),
+        fmt("Avg expected profit", stats["avg_expected_profit"], "£"),
+        fmt("Avg confidence", stats["avg_confidence"]),
+        fmt("Avg score", stats["avg_score"]),
+        fmt("Scam flags", stats["scam_flags"]),
         "",
-        "By source:",
+        "Data health:",
     ]
+    health = stats["data_health"]
+    lines += [
+        f"  observed sales      : {health['sold_observations']} "
+        f"across {health['sold_product_keys']} products",
+        f"  comps being watched : {health['comps_watched']}",
+        f"  valuations          : {health['valuations']} "
+        f"({health['valuations_from_sold']} from observed sales)",
+    ]
+    lines += ["", "By source:"]
     for r in stats["per_source"]:
         lines.append(f"  {r['source']:<16} {r['deals']:>4} deals   avg ROI {r['avg_roi']}%")
-    lines.append("")
-    lines.append("By sell channel:")
+    lines += ["", "By sell channel:"]
     for r in stats["per_channel"]:
         lines.append(f"  {r['channel']:<16} {r['deals']:>4} deals   avg profit £{r['avg_profit']}")
-    lines.append("")
-    lines.append("Deals per day:")
+    lines += ["", "Deals per day:"]
     for r in stats["per_day"]:
-        lines.append(f"  {r['date']}   {r['deals']}")
+        lines.append(f"  {r['date']}   {r['deals']:>3}   £{r['expected_profit']}")
     return "\n".join(lines)

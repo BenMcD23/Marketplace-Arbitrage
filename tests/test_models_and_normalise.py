@@ -5,6 +5,7 @@ from sources.normalise import (
     extract_brand,
     extract_model_number,
     normalise_condition,
+    product_key,
 )
 
 
@@ -21,7 +22,9 @@ def test_listing_id_differs_by_source():
 
 
 def test_buy_cost_sums_price_and_shipping():
-    listing = Listing(source="ebay", source_listing_id="1", title="x", price=10.0, shipping=2.5, url="u")
+    listing = Listing(
+        source="ebay", source_listing_id="1", title="x", price=10.0, shipping=2.5, url="u"
+    )
     assert listing.buy_cost == 12.5
 
 
@@ -45,3 +48,36 @@ def test_normalise_condition():
     assert normalise_condition("For parts or not working") == Condition.FOR_PARTS
     assert normalise_condition(None) == Condition.UNKNOWN
     assert normalise_condition("weird custom text") == Condition.UNKNOWN
+
+
+# ------------------------------------------------------------------ product key
+def test_product_key_survives_how_sellers_write_titles():
+    """The same phone written two ways must group to one key."""
+    a = product_key("Apple iPhone 12 128GB Blue Unlocked")
+    b = product_key("iPhone 12 (128 GB) unlocked - blue, excellent condition")
+    assert a == b
+
+
+def test_product_key_separates_capacities():
+    """Capacity is a price-determining variant, so it must fork the key."""
+    assert product_key("Apple iPhone 12 128GB") != product_key("Apple iPhone 12 256GB")
+
+
+def test_product_key_normalises_terabytes_to_gigabytes():
+    assert product_key("MacBook Pro 1TB") == product_key("MacBook Pro 1024GB")
+
+
+def test_product_key_separates_models():
+    assert product_key("Apple iPhone 12 128GB") != product_key("Apple iPhone 13 128GB")
+
+
+def test_product_key_ignores_sales_adjectives():
+    assert product_key("Sony WH-1000XM4 mint boxed fast free postage") == product_key(
+        "Sony WH-1000XM4"
+    )
+
+
+def test_product_key_is_deterministic_for_wordy_titles():
+    key = product_key("some unbranded gadget thing")
+    assert key
+    assert key == product_key("some unbranded gadget thing")
