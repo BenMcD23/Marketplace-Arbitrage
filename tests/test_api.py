@@ -214,3 +214,16 @@ def test_valuation_lookup(seeded):
     assert valuation["confidence"] > 0
 
     assert client.get("/api/valuations/not-a-real-key").status_code == 404
+
+
+# ------------------------------------------------------------------ scan trigger
+def test_triggering_a_scan_records_a_run(client):
+    """No credentials configured, so the scan finds no sources — but it still
+    runs end to end and leaves a run record, which is what the UI polls."""
+    response = client.post('/api/runs')
+    assert response.status_code == 202
+    assert response.json()['id'] is not None
+
+    runs = client.get('/api/runs').json()
+    assert len(runs) == 1
+    assert runs[0]['status'] in {'running', 'complete'}

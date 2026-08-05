@@ -49,16 +49,22 @@ async def run_once(
         db = db or Database(settings.db_path)
 
         run_id = db.start_run()
-        ebay = build_ebay_client(settings)
-        oracle = build_oracle(settings, db, ebay=ebay)
-        alerter = build_alerter(settings)
-        sources = build_sources(settings, db, ebay=ebay)
+        oracle = None
+        alerter = None
 
-        if not sources:
-            log.warning("no_sources_enabled")
-
-        pipeline = Pipeline(settings, db, oracle, alerter)
+        # Wiring lives inside the try as well as the run itself. A failure while
+        # building sources would otherwise leave the run row stuck on "running"
+        # forever, and the dashboard polling it would spin indefinitely.
         try:
+            ebay = build_ebay_client(settings)
+            oracle = build_oracle(settings, db, ebay=ebay)
+            alerter = build_alerter(settings)
+            sources = build_sources(settings, db, ebay=ebay)
+
+            if not sources:
+                log.warning("no_sources_enabled")
+
+            pipeline = Pipeline(settings, db, oracle, alerter)
             stats = await pipeline.run(sources, run_id=run_id)
         except Exception as exc:
             db.finish_run(
@@ -72,8 +78,10 @@ async def run_once(
             log.error("run_failed", error=str(exc))
             raise
         finally:
-            await oracle.aclose()
-            await alerter.aclose()
+            if oracle is not None:
+                await oracle.aclose()
+            if alerter is not None:
+                await alerter.aclose()
             if owns_db:
                 db.close()
 
