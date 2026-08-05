@@ -1,15 +1,31 @@
 services:
+  # The scanner: runs the pipeline on an interval.
   arb:
     build: .
-    image: electronics-arb:latest
-    container_name: electronics-arb
+    image: marketplace-arb:latest
+    container_name: marketplace-arb
     restart: unless-stopped
     env_file:
       - .env
     volumes:
-      # Persist the SQLite db (deals, dedup, price cache) and scraper sessions.
+      # Persist the SQLite db (deals, sold history, price cache) and scraper sessions.
       - ./data:/app/data
     # Default command runs the scheduler; override for one-off runs:
     #   docker compose run --rm arb run --dry
     #   docker compose run --rm arb stats
     command: ["schedule", "--interval", "15"]
+
+  # The API the dashboard talks to. Shares the same database file, which SQLite
+  # handles fine in WAL mode — the scanner writes, the API mostly reads.
+  api:
+    build: .
+    image: marketplace-arb:latest
+    container_name: marketplace-arb-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8000:8000"
+    command: ["serve", "--host", "0.0.0.0", "--port", "8000"]
