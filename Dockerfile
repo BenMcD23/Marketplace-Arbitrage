@@ -17,6 +17,7 @@ COPY sources ./sources
 COPY oracle ./oracle
 COPY engine ./engine
 COPY alerts ./alerts
+COPY api ./api
 COPY main.py ./
 
 RUN uv pip install --system -e .

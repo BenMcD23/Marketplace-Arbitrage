@@ -1,7 +1,7 @@
 [project]
 name = "arb"
 version = "0.1.0"
-description = "Electronics arbitrage pipeline: scans marketplaces for underpriced electronics, values them against real resale data, and pushes profitable finds to Telegram."
+description = "Electronics arbitrage pipeline: scans marketplaces for underpriced electronics, values them against real resale data, and records profitable finds."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -13,6 +13,8 @@ dependencies = [
     "playwright>=1.44",
     "apscheduler>=3.10",
     "tenacity>=8.3",
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
 ]
 
 [project.optional-dependencies]
@@ -31,7 +33,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["arb", "sources", "oracle", "engine", "alerts"]
+packages = ["arb", "sources", "oracle", "engine", "alerts", "api"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -45,3 +47,8 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 ignore = ["E501", "UP042"]
+
+[tool.ruff.lint.per-file-ignores]
+# FastAPI's dependency injection is expressed as call-in-default; that is the
+# framework's intended idiom, not a mutable-default bug.
+"api/**" = ["B008"]

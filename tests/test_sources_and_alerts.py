@@ -3,14 +3,16 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from alerts.telegram import format_deal
+import httpx
+import pytest
+import respx
+
 from arb.config import Settings
-from arb.models import Condition
-from engine.deals import evaluate
-from sources.ebay import parse_browse_item
+from arb.models import Condition, WatchQuery
+from oracle.ebay_client import EbayClient
+from sources.ebay import EbaySource, parse_browse_item
 from sources.fb_marketplace import extract_item_id
 from sources.gumtree import build_listing, parse_price
-from tests.conftest import make_listing, make_valuation
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -66,27 +68,55 @@ def test_fb_extract_item_id():
     assert extract_item_id("/marketplace/category/electronics") is None
 
 
-def test_format_deal_real(settings):
-    listing = make_listing(price=200.0)
-    deal = evaluate(listing, make_valuation(), settings)
-    msg = format_deal(deal, listing)
-    assert "DEAL" in msg
-    assert "Est. profit" in msg
-    assert "example.com" in msg
-    assert "TOO GOOD" not in msg
+# ------------------------------------------------------------------ eBay source
+@pytest.mark.asyncio
+@respx.mock
+async def test_ebay_source_fetches_each_watched_query():
+    """Searches come from the watch list, not from a hard-coded env var."""
+    respx.post("https://api.ebay.com/identity/v1/oauth2/token").mock(
+        return_value=httpx.Response(200, json={"access_token": "tok", "expires_in": 7200})
+    )
+    route = respx.get("https://api.ebay.com/buy/browse/v1/item_summary/search").mock(
+        return_value=httpx.Response(
+            200, json=json.loads((FIXTURES / "ebay_browse.json").read_text())
+        )
+    )
+
+    settings = Settings(_env_file=None)
+    client = EbayClient("id", "secret")
+    source = EbaySource(
+        settings,
+        queries=[WatchQuery(query="iphone 12"), WatchQuery(query="ps5")],
+        client=client,
+    )
+    try:
+        listings = [listing async for listing in source.fetch()]
+    finally:
+        await source.aclose()
+
+    assert route.call_count == 2       # one search per watched query
+    assert len(listings) == 4          # two items from each
+    assert {listing.source for listing in listings} == {"ebay"}
 
 
-def test_format_deal_scam(settings):
-    listing = make_listing(price=50.0)
-    deal = evaluate(listing, make_valuation(), settings)
-    assert deal.is_scam_flag
-    msg = format_deal(deal, listing)
-    assert "TOO GOOD TO BE TRUE" in msg
+@pytest.mark.asyncio
+@respx.mock
+async def test_ebay_source_skips_disabled_queries():
+    respx.post("https://api.ebay.com/identity/v1/oauth2/token").mock(
+        return_value=httpx.Response(200, json={"access_token": "tok", "expires_in": 7200})
+    )
+    route = respx.get("https://api.ebay.com/buy/browse/v1/item_summary/search").mock(
+        return_value=httpx.Response(200, json={"itemSummaries": []})
+    )
 
+    source = EbaySource(
+        Settings(_env_file=None),
+        queries=[WatchQuery(query="on"), WatchQuery(query="off", enabled=False)],
+        client=EbayClient("id", "secret"),
+    )
+    try:
+        [listing async for listing in source.fetch()]
+    finally:
+        await source.aclose()
 
-def test_format_deal_escapes_html(settings):
-    listing = make_listing(price=200.0, title="Phone <script> & stuff")
-    deal = evaluate(listing, make_valuation(), settings)
-    msg = format_deal(deal, listing)
-    assert "<script>" not in msg
-    assert "&lt;script&gt;" in msg
+    assert route.call_count == 1

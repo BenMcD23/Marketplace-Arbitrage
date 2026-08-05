@@ -1,9 +1,11 @@
 """eBay Browse API source.
 
-Fetches Buy-It-Now electronics listings by category + keyword, filtered by max
-price and condition, and normalises each into a `Listing`. This is the first
-"real" source and the milestone target: the whole pipeline must work on
-legitimate eBay API data before any scraping is added.
+Fetches Buy-It-Now listings for each watched search term and normalises them
+into `Listing` objects. This is the only source that matters right now: it is
+free, it is within eBay's terms, and it is where the buying happens.
+
+Searches come from the `watch_queries` table (managed in the UI) so the scan
+can be retargeted without a redeploy.
 """
 
 from __future__ import annotations
@@ -15,28 +17,12 @@ import httpx
 
 from arb.config import Settings
 from arb.logging_conf import get_logger
-from arb.models import Listing
-from oracle.ebay_client import BROWSE_URL, EbayClient
+from arb.models import Listing, WatchQuery
+from oracle.ebay_client import CONDITION_IDS, BudgetExhausted, EbayClient
 from sources.base import Source
 from sources.normalise import clean_title, extract_brand, extract_model_number, normalise_condition
 
 log = get_logger("sources.ebay")
-
-# eBay condition ids -> our raw condition strings (fed through normalise).
-_CONDITION_IDS = {
-    "1000": "new",
-    "1500": "new other",
-    "1750": "new other",
-    "2000": "manufacturer refurbished",
-    "2010": "manufacturer refurbished",
-    "2020": "seller refurbished",
-    "2030": "seller refurbished",
-    "3000": "used",
-    "4000": "used",
-    "5000": "used",
-    "6000": "used",
-    "7000": "for parts or not working",
-}
 
 
 def parse_browse_item(item: dict[str, Any]) -> Listing | None:
@@ -57,13 +43,15 @@ def parse_browse_item(item: dict[str, Any]) -> Listing | None:
 
     raw_condition = item.get("condition")
     if not raw_condition:
-        raw_condition = _CONDITION_IDS.get(str(item.get("conditionId", "")), None)
+        raw_condition = CONDITION_IDS.get(str(item.get("conditionId", "")), None)
 
     title = clean_title(title)
     location = None
     loc = item.get("itemLocation") or {}
     if loc:
-        location = ", ".join(filter(None, [loc.get("city"), loc.get("postalCode"), loc.get("country")])) or None
+        location = ", ".join(
+            filter(None, [loc.get("city"), loc.get("postalCode"), loc.get("country")])
+        ) or None
 
     return Listing(
         source="ebay",
@@ -86,17 +74,15 @@ class EbaySource(Source):
     def __init__(
         self,
         settings: Settings,
-        queries: list[str],
-        category_id: str | None = None,
-        max_price: float | None = None,
+        queries: list[WatchQuery],
         limit: int = 50,
         client: EbayClient | None = None,
+        on_query_done: callable | None = None,
     ):
         self.settings = settings
         self.queries = queries
-        self.category_id = category_id
-        self.max_price = max_price
         self.limit = limit
+        self._on_query_done = on_query_done
         self._client = client or EbayClient(
             client_id=settings.ebay_client_id or "",
             client_secret=settings.ebay_client_secret or "",
@@ -104,36 +90,40 @@ class EbaySource(Source):
             has_insights=settings.ebay_has_insights,
         )
 
+    @property
+    def client(self) -> EbayClient:
+        return self._client
+
     async def aclose(self) -> None:
         await self._client.aclose()
 
-    def _build_filter(self) -> str:
-        parts = ["buyingOptions:{FIXED_PRICE}"]
-        if self.max_price is not None:
-            parts.append(f"price:[..{self.max_price}]")
-            parts.append("priceCurrency:GBP")
-        return ",".join(parts)
-
     async def fetch(self) -> AsyncIterator[Listing]:
-        headers = await self._client._headers()  # reuse token + marketplace headers
-        for query in self.queries:
-            params = {
-                "q": query,
-                "limit": str(self.limit),
-                "filter": self._build_filter(),
-            }
-            if self.category_id:
-                params["category_ids"] = self.category_id
-            try:
-                resp = await self._client._client.get(BROWSE_URL, headers=headers, params=params)
-                resp.raise_for_status()
-            except httpx.HTTPError as exc:
-                log.warning("ebay_fetch_error", query=query, error=str(exc))
+        for watch in self.queries:
+            if not watch.enabled:
                 continue
-            payload = resp.json()
+            try:
+                payload = await self._client.search(
+                    watch.query,
+                    limit=self.limit,
+                    category_id=watch.category_id or self.settings.ebay_category_id,
+                    max_price=watch.max_price
+                    if watch.max_price is not None
+                    else self.settings.ebay_max_price,
+                    min_price=watch.min_price,
+                )
+            except BudgetExhausted:
+                # Let the pipeline decide what to do about the day's allowance.
+                raise
+            except httpx.HTTPError as exc:
+                log.warning("ebay_fetch_error", query=watch.query, error=str(exc))
+                continue
+
             items = payload.get("itemSummaries") or []
-            log.info("ebay_fetched", query=query, count=len(items))
+            log.info("ebay_fetched", query=watch.query, count=len(items))
             for raw in items:
                 listing = parse_browse_item(raw)
                 if listing is not None:
                     yield listing
+
+            if self._on_query_done is not None:
+                self._on_query_done(watch.query)

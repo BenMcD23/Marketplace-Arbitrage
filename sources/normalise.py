@@ -114,3 +114,66 @@ def normalise_condition(raw: str | None) -> Condition:
         if phrase in key:
             return cond
     return Condition.UNKNOWN
+
+
+# Words that describe the sale rather than the product, so they must never end
+# up in a product key — otherwise the same phone listed twice with different
+# adjectives gets valued as two different products.
+_KEY_NOISE = {
+    "new", "used", "boxed", "unlocked", "sim", "free", "genuine", "original",
+    "official", "sealed", "mint", "excellent", "good", "condition", "grade",
+    "very", "great", "perfect", "working", "tested", "fully", "vgc", "the",
+    "and", "with", "for", "in", "on", "of", "to", "a", "an", "fast", "post",
+    "postage", "delivery", "uk", "warranty", "refurbished", "pristine",
+    "immaculate", "cheap", "bargain", "rare", "spares", "repair",
+}
+
+_CAPACITY_KEY_RE = re.compile(r"\b(\d+)\s?(gb|tb)\b", re.I)
+
+
+def product_key(title: str, brand: str | None = None, model_number: str | None = None) -> str:
+    """A canonical grouping key for "the same product".
+
+    Valuations are cached against this key and observed sales are grouped by it,
+    so it needs to be stable across the wildly different ways sellers write the
+    same title — "Apple iPhone 12 128GB Blue Unlocked" and "iPhone 12 (128 GB)
+    unlocked - blue" must land on the same key — while still separating genuinely
+    different products, especially by capacity.
+
+    The key is built from the most distinguishing tokens rather than the whole
+    title: brand, any extracted model number, the capacity, and the tokens that
+    contain digits (in electronics the numbers *are* the product). Tokens are
+    sorted so word order cannot fork the key.
+    """
+    brand = brand or extract_brand(title)
+    model_number = model_number or extract_model_number(title)
+
+    parts: set[str] = set()
+    if brand:
+        parts.add(brand.lower())
+    if model_number:
+        parts.add(model_number.lower())
+
+    # Capacity is extracted and normalised first, then removed from the working
+    # title. Otherwise "128 GB" leaves a stray "128" token behind while "128GB"
+    # does not, and the same phone forks into two keys on nothing but a space.
+    capacity = _CAPACITY_KEY_RE.search(title)
+    if capacity:
+        amount, unit = int(capacity.group(1)), capacity.group(2).lower()
+        parts.add(f"{amount * 1024 if unit == 'tb' else amount}gb")
+    remainder = _CAPACITY_KEY_RE.sub(" ", title)
+
+    tokens = [t for t in re.findall(r"[a-z0-9]+", remainder.lower()) if len(t) > 1]
+    tokens = [t for t in tokens if t not in _KEY_NOISE]
+
+    # Numeric-bearing tokens carry the model identity; keep them all.
+    for token in tokens:
+        if any(ch.isdigit() for ch in token):
+            parts.add(token)
+
+    # If nothing distinguishing was found, fall back to the first few words so
+    # the key is at least deterministic.
+    if not parts:
+        parts.update(tokens[:4])
+
+    return "|".join(sorted(parts)) or clean_title(title).lower()
