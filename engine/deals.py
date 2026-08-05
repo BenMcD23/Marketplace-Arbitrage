@@ -48,10 +48,35 @@ class ChannelResult:
     days_to_sell: int
     holding_cost: float
     expected_profit: float
+    #: Profit from selling to CeX at their cash offer, when one exists.
+    floor_profit: float | None = None
 
     @property
     def est_resale(self) -> float:
         return self.expected.resale
+
+    @property
+    def realistic_downside(self) -> float:
+        """The worse case you would actually accept.
+
+        If CeX will pay more than a bad eBay sale would net, you take the CeX
+        money — so the downside is the better of the two, not the eBay one.
+        """
+        if self.floor_profit is None:
+            return self.downside.profit
+        return max(self.downside.profit, self.floor_profit)
+
+
+def cex_floor_profit(valuation: Valuation, buy_cost: float, settings: Settings) -> float | None:
+    """What you would clear by selling to CeX today, or None if they won't buy.
+
+    This is the one number in the whole engine that is not an estimate. CeX
+    publishes a cash offer and honours it, so a listing whose floor is already
+    positive is profitable before any prediction about eBay is involved.
+    """
+    if not settings.enable_cex or not valuation.cex_cash_price:
+        return None
+    return round(valuation.cex_cash_price - buy_cost - settings.cex_trade_in_cost, 2)
 
 
 def estimate_p_sale(valuation: Valuation, settings: Settings) -> float:
@@ -100,6 +125,13 @@ def score_deal(result: ChannelResult, valuation: Valuation, settings: Settings) 
         + 0.30 * confidence_component
         + 0.15 * velocity_component
     )
+
+    # A deal already in profit at CeX's guaranteed cash price does not depend on
+    # any prediction being right, so it earns a bounded bonus. Capped, because
+    # the floor is a safety net, not the reason to buy.
+    if result.floor_profit is not None and result.floor_profit > 0:
+        raw += 0.10 * min(1.0, result.floor_profit / 50.0)
+
     return round(100.0 * max(0.0, min(1.0, raw)), 1)
 
 
@@ -120,23 +152,27 @@ def _score_channel(
     p_sale = estimate_p_sale(valuation, settings)
     days = estimate_days_to_sell(valuation, settings)
     holding = round(buy_cost * settings.daily_capital_cost_pct * days, 2)
+    floor = cex_floor_profit(valuation, buy_cost, settings)
 
-    # Two-point expectation: it sells at the estimate, or it eventually clears at
-    # the pessimistic end of the range. Not selling at all is not modelled as a
-    # total loss, because in practice you drop the price until it moves.
-    expected_profit = round(
-        p_sale * expected.profit + (1 - p_sale) * downside.profit - holding, 2
-    )
-
-    return ChannelResult(
+    result = ChannelResult(
         channel=channel,
         expected=expected,
         downside=downside,
         p_sale=p_sale,
         days_to_sell=days,
         holding_cost=holding,
-        expected_profit=expected_profit,
+        expected_profit=0.0,
+        floor_profit=floor,
     )
+
+    # Two-point expectation: it sells at the estimate, or it clears at the worse
+    # of the two prices you would actually accept. Not selling at all is never
+    # modelled as a total loss — in practice you drop the price, or take CeX's
+    # cash, and a guaranteed floor is what stops the bad branch being a guess.
+    result.expected_profit = round(
+        p_sale * expected.profit + (1 - p_sale) * result.realistic_downside - holding, 2
+    )
+    return result
 
 
 def _candidate_channels(
@@ -203,7 +239,8 @@ def _build_deal(
         expected_profit=result.expected_profit,
         confidence=valuation.confidence,
         score=0.0 if is_scam else score_deal(result, valuation, settings),
-        worst_case_profit=result.downside.profit,
+        worst_case_profit=result.realistic_downside,
+        floor_profit=result.floor_profit,
         is_scam_flag=is_scam,
         reasons=reasons,
     )
@@ -305,6 +342,7 @@ def explain(
     basis_text = {
         PriceBasis.SOLD: f"{valuation.comp_count} observed sales",
         PriceBasis.ACTIVE: f"{valuation.comp_count} active listings (discounted to a sale price)",
+        PriceBasis.CEX: f"CeX's used price for {valuation.cex_match or 'a matching product'}",
         PriceBasis.AMAZON: "Amazon pricing via Keepa",
         PriceBasis.NONE: "no comparable data",
     }[valuation.basis]
@@ -321,15 +359,29 @@ def explain(
         f"£{result.holding_cost:.2f} of held capital → £{result.expected_profit:.2f} expected."
     )
 
-    if result.downside.profit < 0:
+    if result.floor_profit is not None:
+        if result.floor_profit > 0:
+            notes.append(
+                f"Guaranteed floor: CeX will pay £{valuation.cex_cash_price:.2f} cash, so you "
+                f"clear £{result.floor_profit:.2f} without needing it to sell on "
+                f"{result.channel.value} at all."
+            )
+        else:
+            notes.append(
+                f"Floor: CeX would pay £{valuation.cex_cash_price:.2f} cash — "
+                f"£{abs(result.floor_profit):.2f} short of your cost, so it caps the loss "
+                "rather than removing it."
+            )
+
+    if result.realistic_downside < 0:
         notes.append(
             f"Downside: at the pessimistic £{result.downside.resale:.2f} resale you would "
-            f"lose £{abs(result.downside.profit):.2f}."
+            f"lose £{abs(result.realistic_downside):.2f}."
         )
     else:
         notes.append(
             f"Downside: even at £{result.downside.resale:.2f} you clear "
-            f"£{result.downside.profit:.2f}."
+            f"£{result.realistic_downside:.2f}."
         )
 
     if valuation.dispersion_cv > 0.3:

@@ -71,6 +71,26 @@ class SoldTracker:
             )
 
     # ------------------------------------------------------------------ sweep
+    def sweep_budget(self) -> int:
+        """How many listing checks this run may spend.
+
+        While the sold history is thin the daily API allowance is mostly idle,
+        and every idle call is another day added to the cold start — so the
+        sweep runs much harder until there is enough history to price from, then
+        settles back to a maintenance rate. Never more than the day's remaining
+        allowance, whichever mode it is in.
+        """
+        observed = self.db.sold_count()
+        if observed < self.settings.sold_bootstrap_threshold:
+            limit = self.settings.sold_sweep_bootstrap_checks
+        else:
+            limit = self.settings.sold_sweep_max_checks
+
+        if self.ebay is not None:
+            # Leave the scan's own needs alone: only spend what is actually left.
+            limit = min(limit, self.ebay.budget.remaining)
+        return max(0, limit)
+
     async def sweep(self, max_checks: int | None = None) -> int:
         """Resolve stale watched comps into sold observations.
 
@@ -80,7 +100,7 @@ class SoldTracker:
         """
         if self.ebay is None:
             return 0
-        limit = max_checks if max_checks is not None else self.settings.sold_sweep_max_checks
+        limit = max_checks if max_checks is not None else self.sweep_budget()
         if limit <= 0:
             return 0
 

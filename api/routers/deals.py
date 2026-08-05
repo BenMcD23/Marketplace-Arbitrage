@@ -27,6 +27,7 @@ SORTABLE = {
     "confidence": "d.confidence",
     "flagged_at": "d.flagged_at",
     "buy_cost": "d.buy_cost",
+    "floor_profit": "d.floor_profit",
 }
 
 
@@ -44,6 +45,7 @@ def list_deals(
     source: str | None = None,
     search: str | None = None,
     include_scams: bool = False,
+    guaranteed_only: bool = False,
     days: int | None = None,
 ) -> DealPage:
     if sort not in SORTABLE:
@@ -72,6 +74,9 @@ def list_deals(
     if search:
         where.append("l.title LIKE ?")
         params.append(f"%{search}%")
+    if guaranteed_only:
+        # Deals already in profit at CeX's cash offer — no prediction required.
+        where.append("d.floor_profit > 0")
     if days is not None:
         where.append("d.flagged_at >= datetime('now', ?)")
         params.append(f"-{days} days")

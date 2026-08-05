@@ -138,6 +138,46 @@ def extract_capacity(title: str) -> str | None:
     return f"{gb}gb"
 
 
+def _split_model_tokens(title: str) -> tuple[set[str], set[str]]:
+    """Model-identifying tokens, split into (bare numbers, alphanumerics).
+
+    Capacity is excluded — it is checked separately, and unlike a model number
+    it is legitimately often left unstated.
+    """
+    without_capacity = _CAPACITY_RE.sub(" ", title)
+    bare: set[str] = set()
+    alnum: set[str] = set()
+    for token in re.findall(r"[a-z0-9]+", without_capacity.lower()):
+        if not any(ch.isdigit() for ch in token):
+            continue
+        if token.isdigit():
+            bare.add(token)
+        else:
+            alnum.add(token)
+    return bare, alnum
+
+
+def contradicts_model(target_title: str, comp_title: str) -> bool:
+    """True when the comp is a different model of the same kind of thing.
+
+    Relevance scoring alone cannot catch this: "Apple iPhone 13 128GB Blue"
+    matches every word of "Apple iPhone 12 128GB" except one character, so it
+    clears any sane threshold — and it is worth about £150 more.
+
+    The rule only fires on *contradiction*, never on absence. A comp that simply
+    omits the number is allowed through (plenty of real listings do); a comp
+    that states a different one is not.
+    """
+    target_bare, target_alnum = _split_model_tokens(target_title)
+    comp_bare, comp_alnum = _split_model_tokens(comp_title)
+
+    if target_bare and comp_bare and comp_bare.isdisjoint(target_bare):
+        return True
+    if target_alnum and comp_alnum and comp_alnum.isdisjoint(target_alnum):
+        return True
+    return False
+
+
 def relevance(target_tokens: list[str], comp_title: str) -> float:
     """Fraction of the target's distinguishing tokens present in the comp.
 
@@ -199,6 +239,10 @@ def select_comps(
             if comp_capacity is not None and comp_capacity != target_capacity:
                 selection.rejected.append((comp, "capacity_mismatch"))
                 continue
+
+        if contradicts_model(target_title, comp.title):
+            selection.rejected.append((comp, "model_mismatch"))
+            continue
 
         score = relevance(target_tokens, comp.title)
         if score < min_relevance:

@@ -66,6 +66,9 @@ CREATE TABLE IF NOT EXISTS valuations (
     confidence         REAL NOT NULL DEFAULT 0,
     sell_through_pct   REAL,
     est_days_to_sell   INTEGER,
+    cex_sell_price     REAL,
+    cex_cash_price     REAL,
+    cex_match          TEXT,
     amazon_price       REAL,
     amazon_rank        INTEGER,
     sample_json        TEXT NOT NULL DEFAULT '[]',
@@ -89,6 +92,7 @@ CREATE TABLE IF NOT EXISTS deals (
     confidence         REAL NOT NULL DEFAULT 0,
     score              REAL NOT NULL DEFAULT 0,
     worst_case_profit  REAL NOT NULL DEFAULT 0,
+    floor_profit       REAL,
     is_scam_flag       INTEGER NOT NULL DEFAULT 0,
     reasons_json       TEXT NOT NULL DEFAULT '[]',
     flagged_at         TEXT NOT NULL,
@@ -209,7 +213,8 @@ class Database:
             if row is None:
                 continue
             cols = {r["name"] for r in self._conn.execute(f"PRAGMA table_info({table})")}
-            if expected_pk not in cols or "confidence" not in cols:
+            required = {"valuations": "cex_cash_price", "deals": "floor_profit"}[table]
+            if expected_pk not in cols or required not in cols:
                 self._conn.execute(f"DROP TABLE {table}")
         self._conn.commit()
 
@@ -294,12 +299,12 @@ class Database:
                 INSERT INTO valuations
                     (product_key, resale_price, basis, comp_count, comps_rejected,
                      dispersion_cv, price_p10, price_p90, confidence, sell_through_pct,
-                     est_days_to_sell, amazon_price, amazon_rank, sample_json,
-                     reject_json, updated_at)
+                     est_days_to_sell, cex_sell_price, cex_cash_price, cex_match,
+                     amazon_price, amazon_rank, sample_json, reject_json, updated_at)
                 VALUES (:product_key, :resale_price, :basis, :comp_count, :comps_rejected,
                         :dispersion_cv, :price_p10, :price_p90, :confidence, :sell_through_pct,
-                        :est_days_to_sell, :amazon_price, :amazon_rank, :sample_json,
-                        :reject_json, :updated_at)
+                        :est_days_to_sell, :cex_sell_price, :cex_cash_price, :cex_match,
+                        :amazon_price, :amazon_rank, :sample_json, :reject_json, :updated_at)
                 ON CONFLICT(product_key) DO UPDATE SET
                     resale_price=excluded.resale_price, basis=excluded.basis,
                     comp_count=excluded.comp_count, comps_rejected=excluded.comps_rejected,
@@ -307,6 +312,9 @@ class Database:
                     price_p90=excluded.price_p90, confidence=excluded.confidence,
                     sell_through_pct=excluded.sell_through_pct,
                     est_days_to_sell=excluded.est_days_to_sell,
+                    cex_sell_price=excluded.cex_sell_price,
+                    cex_cash_price=excluded.cex_cash_price,
+                    cex_match=excluded.cex_match,
                     amazon_price=excluded.amazon_price, amazon_rank=excluded.amazon_rank,
                     sample_json=excluded.sample_json, reject_json=excluded.reject_json,
                     updated_at=excluded.updated_at
@@ -323,6 +331,9 @@ class Database:
                     "confidence": valuation.confidence,
                     "sell_through_pct": valuation.sell_through_pct,
                     "est_days_to_sell": valuation.est_days_to_sell,
+                    "cex_sell_price": valuation.cex_sell_price,
+                    "cex_cash_price": valuation.cex_cash_price,
+                    "cex_match": valuation.cex_match,
                     "amazon_price": valuation.amazon_price,
                     "amazon_rank": valuation.amazon_rank,
                     "sample_json": json.dumps([c.model_dump(mode="json") for c in valuation.sample]),
@@ -339,11 +350,11 @@ class Database:
                 INSERT INTO deals
                     (listing_id, buy_cost, est_resale, est_fees, est_profit, margin_pct,
                      roi_pct, sell_channel, p_sale, est_days_to_sell, holding_cost,
-                     expected_profit, confidence, score, worst_case_profit,
+                     expected_profit, confidence, score, worst_case_profit, floor_profit,
                      is_scam_flag, reasons_json, flagged_at)
                 VALUES (:listing_id, :buy_cost, :est_resale, :est_fees, :est_profit, :margin_pct,
                         :roi_pct, :sell_channel, :p_sale, :est_days_to_sell, :holding_cost,
-                        :expected_profit, :confidence, :score, :worst_case_profit,
+                        :expected_profit, :confidence, :score, :worst_case_profit, :floor_profit,
                         :is_scam_flag, :reasons_json, :flagged_at)
                 ON CONFLICT(listing_id) DO UPDATE SET
                     buy_cost=excluded.buy_cost, est_resale=excluded.est_resale,
@@ -355,6 +366,7 @@ class Database:
                     expected_profit=excluded.expected_profit,
                     confidence=excluded.confidence, score=excluded.score,
                     worst_case_profit=excluded.worst_case_profit,
+                    floor_profit=excluded.floor_profit,
                     is_scam_flag=excluded.is_scam_flag, reasons_json=excluded.reasons_json,
                     flagged_at=excluded.flagged_at
                 """,
@@ -374,6 +386,7 @@ class Database:
                     "confidence": deal.confidence,
                     "score": deal.score,
                     "worst_case_profit": deal.worst_case_profit,
+                    "floor_profit": deal.floor_profit,
                     "is_scam_flag": int(deal.is_scam_flag),
                     "reasons_json": json.dumps(deal.reasons),
                     "flagged_at": _iso(deal.flagged_at),
@@ -694,6 +707,9 @@ def _row_to_valuation(row: sqlite3.Row) -> Valuation:
         confidence=row["confidence"],
         sell_through_pct=row["sell_through_pct"],
         est_days_to_sell=row["est_days_to_sell"],
+        cex_sell_price=row["cex_sell_price"],
+        cex_cash_price=row["cex_cash_price"],
+        cex_match=row["cex_match"],
         amazon_price=row["amazon_price"],
         amazon_rank=row["amazon_rank"],
         sample=[CompRef(**c) for c in json.loads(row["sample_json"] or "[]")],
@@ -719,6 +735,7 @@ def _row_to_deal(row: sqlite3.Row) -> Deal:
         confidence=row["confidence"],
         score=row["score"],
         worst_case_profit=row["worst_case_profit"],
+        floor_profit=row["floor_profit"],
         is_scam_flag=bool(row["is_scam_flag"]),
         reasons=json.loads(row["reasons_json"] or "[]"),
         flagged_at=_parse_dt(row["flagged_at"]) or datetime.now(UTC),

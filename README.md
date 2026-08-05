@@ -62,8 +62,10 @@ various sold-comp resellers are monthly subscriptions. So the data everyone
 tells you to use is, in practice, unavailable or expensive.
 
 **What is actually free.** The eBay **Browse API** — 5,000 calls/day, no card,
-within eBay's terms. It returns *active* listings, not sold ones. That gap is
-the whole problem, and the system closes it three ways.
+within eBay's terms. It returns *active* listings, not sold ones. Plus, for used
+electronics, **CeX publishes real used prices with no key at all**.
+
+The system closes the gap four ways.
 
 ### 1. Active asking prices, honestly discounted
 
@@ -72,7 +74,31 @@ than what buyers *pay*. So asking prices are discounted by a ratio before they
 are treated as a resale estimate — and rather than leaving that ratio as a
 guess, the system **calibrates it from its own accumulated data** (see below).
 
-### 2. Building a sold-price history for free
+### 2. CeX — real used prices, and a guaranteed floor
+
+`oracle/cex_client.py`. CeX publish an unauthenticated JSON API behind their
+store front, giving three numbers for every product they trade: what they
+**sell** the used item for, what they will **pay you** in cash, and the same in
+credit.
+
+The cash price is the one that matters, and it is worth more than another
+estimate because **it is not a prediction — it is an offer**. If you can buy
+something for less than CeX will pay for it, your downside is bounded by money
+you can walk into a shop and collect. The deal engine uses it exactly that way:
+the modelled bad case becomes the *better* of "sells poorly on eBay" and "sell
+it to CeX today", and a deal already in profit at the cash price is flagged as
+guaranteed.
+
+It also works from the very first scan, which is what covers the cold start
+while the sold-price tracker below builds up history — and it doubles as an
+independent second opinion, so when CeX and eBay disagree sharply the valuation
+loses confidence rather than quietly picking one.
+
+Caveats: UK-centric, limited to products CeX choose to trade, and the cash price
+is deliberately under market — a floor, never a target. It is also an unofficial
+API, so every failure there is non-fatal.
+
+### 3. Building a sold-price history for free
 
 `oracle/sold_tracker.py`. A listing that was there yesterday and is gone today
 has told you something. So:
@@ -95,7 +121,7 @@ genuine sold data would earn. If your account *does* have Marketplace Insights,
 set `EBAY_HAS_INSIGHTS=true` and its real sold comps are used instead, with no
 haircut.
 
-### 3. Refusing to price badly
+### 4. Refusing to price badly
 
 The largest accuracy win is not a data source at all — it is throwing out comps
 that should never have counted. A search for "iPhone 12 128GB" returns genuine
@@ -110,6 +136,26 @@ relevance score that weights numeric tokens double — in electronics the number
 and about £150. Then `oracle/robust.py` applies MAD-based outlier rejection, so
 one £2,000 typo cannot drag a £300 valuation upwards.
 
+### Terapeak — the best data, if you accept the trade
+
+eBay gives every seller account **Terapeak** free, with three years of real sold
+prices and a sell-through rate. There is no API for it — Marketplace Insights
+*is* the API and it is closed — so `oracle/terapeak.py` drives Seller Hub in a
+browser using a session you create yourself:
+
+```bash
+uv run arb terapeak-login   # opens a browser; you sign in, only cookies are saved
+```
+
+> ⚠️ **Automating the eBay site outside its published APIs is contrary to eBay's
+> User Agreement, and the account at risk is the one you sell on.** This is off
+> by default (`ENABLE_TERAPEAK=false`) and stays off unless you deliberately turn
+> it on. No credentials are ever asked for, typed or stored by this project.
+
+When enabled, its sold data feeds the oracle as the strongest available basis.
+The parsing is a pure function over the page text, so it is tested offline and a
+Terapeak redesign is a one-function fix rather than a rewrite.
+
 ### Keepa is optional
 
 If you do have a Keepa key, set it and Amazon becomes a second sell channel.
@@ -121,11 +167,12 @@ Every `Valuation` carries a resale price **and how much to believe it**:
 
 | | |
 |---|---|
-| **Basis** | observed sales > discounted asking prices > Amazon |
+| **Basis** | observed sales > discounted asking prices > CeX used price > Amazon |
 | **Comp quality** | how many survived filtering, how many were discarded and why |
 | **Dispersion** | robust spread as a fraction of the median — high means the market disagrees with itself |
 | **Confidence** | 0–1, folding sample size, agreement, comp relevance and basis into one number |
 | **Liquidity** | observed sell-through and median days to sell |
+| **Floor** | CeX's cash offer, when they trade the product — the one number that is not an estimate |
 
 Two things calibrate themselves as data accumulates, rather than staying fixed
 constants:
@@ -147,7 +194,8 @@ sells immediately. None of those are free, so `engine/deals.py` prices them:
 
 - **It might not sell at the median.** Every deal is evaluated twice: once at
   the estimate, once at the pessimistic p10. The downside is reported alongside
-  the headline number.
+  the headline number — and where CeX will pay more than that, the floor
+  replaces it, because that is what you would actually do.
 - **It might not sell soon.** Observed sell-through drives a probability of
   sale (shrunk towards a base rate so one lucky sale does not read as 100%), and
   the capital tied up accrues a holding cost.
@@ -175,6 +223,7 @@ arb serve                  # start the API for the dashboard
 arb watch                  # list watched searches
 arb watch --add "ps5" --max-price 250
 arb watch --remove 3
+arb terapeak-login         # optional: save an eBay session for Terapeak
 ```
 
 ## Configuration
@@ -218,7 +267,8 @@ that become painful can be dropped without touching the core.
 ```
 arb/       config, models, db, pipeline, factory, runner, stats, overrides, cli
 sources/   base Source + normaliser + ebay + scraper_base + gumtree + fb
-oracle/    ebay_client, comps, robust, sold_tracker, pricing, keepa_client
+oracle/    ebay_client, cex_client, terapeak, comps, robust, sold_tracker,
+           pricing, keepa_client
 engine/    fees (itemised) + deals (risk-adjusted scoring)
 api/       FastAPI app, routers, response schemas
 tests/     offline unit + integration tests (fixtures, respx, in-memory sqlite)

@@ -88,6 +88,44 @@ class Settings(BaseSettings):
     sold_sweep_max_checks: int = Field(
         default=150, description="Max ended-listing checks per run (1 API call each)."
     )
+    #: While sold history is thin the daily API allowance is mostly idle, and
+    #: every idle call is a day added to the cold start. Below this many
+    #: observations the sweep is allowed a much bigger budget.
+    sold_bootstrap_threshold: int = Field(
+        default=500, description="Observed sales below which the sweep runs in bootstrap mode."
+    )
+    sold_sweep_bootstrap_checks: int = Field(
+        default=1500, description="Max ended-listing checks per run while bootstrapping."
+    )
+
+    # --- CeX (free used-electronics prices, no key needed) --------------
+    #: CeX gives a real used-retail price and, more usefully, a guaranteed cash
+    #: offer that bounds the downside. Works from the first scan, so it covers
+    #: the cold start while the sold-price tracker builds up history.
+    enable_cex: bool = Field(default=True, description="Use CeX as a price source.")
+    cex_country: str = Field(default="uk", description="CeX country code: uk, es, ie ...")
+    cex_to_ebay_ratio: float = Field(
+        default=0.85,
+        description="CeX retail price -> private-sale eBay price. CeX sells with a shop's margin.",
+    )
+    cex_trade_in_cost: float = Field(
+        default=0.0,
+        description="Cost of realising a CeX cash sale (postage for online trade-in; 0 in store).",
+    )
+    cex_min_relevance: float = Field(
+        default=0.6, description="How well a CeX product must match the listing title."
+    )
+
+    # --- Terapeak (real sold data via your own eBay login) --------------
+    # NOTE: automating the eBay site outside its APIs is contrary to eBay's User
+    # Agreement, and the account at risk is the one you sell on. Off by default.
+    enable_terapeak: bool = Field(
+        default=False, description="Scrape Terapeak via a saved logged-in session."
+    )
+    terapeak_day_range: int = Field(default=90, description="Look-back window in days.")
+    terapeak_render_wait_ms: int = Field(
+        default=4000, description="How long to wait for the metrics to render."
+    )
 
     # --- Keepa (Amazon data) — optional, paid ---------------------------
     keepa_api_key: str | None = None

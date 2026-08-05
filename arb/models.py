@@ -45,6 +45,10 @@ class PriceBasis(str, Enum):
     """
 
     SOLD = "sold"
+    #: CeX's used-retail price, discounted to a private-sale level. Weaker than
+    #: observed sales but available from the very first scan, which is what
+    #: makes it useful before the sold history has built up.
+    CEX = "cex"
     ACTIVE = "active"
     AMAZON = "amazon"
     NONE = "none"
@@ -117,6 +121,15 @@ class Valuation(BaseModel):
     sell_through_pct: float | None = None
     est_days_to_sell: int | None = None
 
+    # --- CeX (free, no key) -------------------------------------------
+    #: What CeX charges for the used item — a real used-retail price.
+    cex_sell_price: float | None = None
+    #: What CeX will pay you in cash. Not a prediction: an offer, and therefore
+    #: a floor under the downside rather than another estimate.
+    cex_cash_price: float | None = None
+    #: The CeX product this was matched against, so the figure can be audited.
+    cex_match: str | None = None
+
     # --- optional Amazon leg (Keepa, paid — off unless a key is configured) ---
     amazon_price: float | None = None
     amazon_rank: int | None = None
@@ -157,8 +170,13 @@ class Deal(BaseModel):
     confidence: float = 0.0
     #: 0..100 composite ranking score.
     score: float = 0.0
-    #: Downside estimate: profit if resale lands at the 10th percentile.
+    #: Downside estimate: profit if resale lands at the 10th percentile — or the
+    #: guaranteed floor below, whichever is better, since you would take the
+    #: better of the two in practice.
     worst_case_profit: float = 0.0
+    #: Profit from selling to CeX at their cash offer. Not an estimate — an
+    #: amount you could walk in and collect. None when CeX has no quote.
+    floor_profit: float | None = None
 
     is_scam_flag: bool = False
     #: Human-readable notes explaining the verdict, shown in the UI.

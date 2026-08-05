@@ -56,6 +56,9 @@ class ValuationOut(BaseModel):
     confidence: float
     sell_through_pct: float | None
     est_days_to_sell: int | None
+    cex_sell_price: float | None
+    cex_cash_price: float | None
+    cex_match: str | None
     amazon_price: float | None
     amazon_rank: int | None
     sample: list[CompRef]
@@ -85,6 +88,7 @@ class DealOut(BaseModel):
     confidence: float
     score: float
     worst_case_profit: float
+    floor_profit: float | None
     is_scam_flag: bool
     reasons: list[str]
     flagged_at: datetime

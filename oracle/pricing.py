@@ -28,11 +28,13 @@ from arb.config import Settings
 from arb.db import Database
 from arb.logging_conf import get_logger
 from arb.models import CompRef, Condition, Listing, PriceBasis, Valuation
+from oracle.cex_client import CexClient, CexQuote
 from oracle.comps import Comp, CompSelection, select_comps
 from oracle.ebay_client import BudgetExhausted, EbayClient
 from oracle.keepa_client import KeepaClient
 from oracle.robust import PriceEstimate, robust_price
 from oracle.sold_tracker import SoldTracker
+from oracle.terapeak import TerapeakClient, stats_to_comps
 from sources.normalise import product_key
 
 log = get_logger("oracle.pricing")
@@ -40,9 +42,18 @@ log = get_logger("oracle.pricing")
 _BASIS_TRUST = {
     PriceBasis.SOLD: 1.0,
     PriceBasis.AMAZON: 0.8,
+    #: CeX is a real used-retail price but for a single matched product on a
+    #: different venue, so it is trusted below the marketplace we actually sell
+    #: on — but above nothing, which is what the cold start used to have.
+    PriceBasis.CEX: 0.65,
     PriceBasis.ACTIVE: 0.7,
     PriceBasis.NONE: 0.0,
 }
+
+#: When two independent sources disagree by more than this, the estimate is
+#: softer than either one alone suggests, and confidence is cut accordingly.
+_DISAGREEMENT_TOLERANCE = 0.35
+_DISAGREEMENT_PENALTY = 0.7
 
 
 def median(values: list[float]) -> float | None:
@@ -221,11 +232,15 @@ class PricingOracle:
         ebay: EbayClient | None = None,
         keepa: KeepaClient | None = None,
         tracker: SoldTracker | None = None,
+        cex: CexClient | None = None,
+        terapeak: TerapeakClient | None = None,
     ):
         self.settings = settings
         self.db = db
         self.ebay = ebay
         self.keepa = keepa
+        self.cex = cex
+        self.terapeak = terapeak
         self.tracker = tracker or SoldTracker(settings, db, ebay)
         self._active_ratio: float | None = None
         self._condition_ratio: float | None = None
@@ -235,6 +250,10 @@ class PricingOracle:
             await self.ebay.aclose()
         if self.keepa:
             await self.keepa.aclose()
+        if self.cex:
+            await self.cex.aclose()
+        if self.terapeak:
+            await self.terapeak.aclose()
 
     @property
     def active_ratio(self) -> float:
@@ -309,13 +328,28 @@ class PricingOracle:
         # Watch the surviving comps so their endings become tomorrow's sold data.
         self.tracker.record_active(key, active_sel.kept)
 
+        # Terapeak, when enabled, contributes genuine sold data — the strongest
+        # signal available, and unlike the tracker it works from the first scan.
+        terapeak_comps: list[Comp] = []
+        terapeak_sell_through: float | None = None
+        if self.terapeak is not None and self.terapeak.enabled:
+            stats = await self.terapeak.stats(query)
+            if stats is not None:
+                terapeak_comps = stats_to_comps(stats)
+                terapeak_sell_through = stats.sell_through_pct
+
         own_sold = self.tracker.sold_comps(key)
         sold_sel = select_comps(
             listing.title,
-            insights_sold + own_sold,
+            insights_sold + own_sold + terapeak_comps,
             min_relevance=self.settings.min_comp_relevance,
             target_condition=listing.condition,
         )
+
+        # CeX is queried regardless of which basis wins: even when it does not
+        # set the price, its cash offer bounds the downside, and its sell price
+        # is an independent second opinion on the estimate.
+        cex_quote = await self._cex_quote(listing, query)
 
         # --- choose a basis ----------------------------------------------
         if len(sold_sel.kept) >= self.settings.min_sold_comps:
@@ -333,14 +367,25 @@ class PricingOracle:
         )
 
         if estimate is None or basis == PriceBasis.NONE:
-            valuation = empty
+            # eBay could not price it. CeX often still can, which is exactly the
+            # cold-start case the tracker cannot help with yet.
+            valuation = self._cex_only_valuation(key, cex_quote) or empty
             valuation.comps_rejected = len(active_sel.rejected)
             valuation.reject_reasons = active_sel.reject_counts()
-            valuation = await self._attach_amazon(valuation, listing)
-            return valuation
+            return await self._attach_amazon(valuation, listing)
 
         resale = round(estimate.value * scale, 2)
         sell_through, days_to_sell = self.tracker.liquidity(key)
+        if sell_through is None:
+            sell_through = terapeak_sell_through
+
+        confidence = confidence_score(estimate, basis, priced_from, self.settings)
+        reject_reasons = _merge_counts(selection.reject_counts(), note)
+
+        # Two independent sources disagreeing is precisely when to be less sure.
+        if cex_quote is not None and _disagrees(resale, cex_quote, self.settings):
+            confidence = round(confidence * _DISAGREEMENT_PENALTY, 3)
+            reject_reasons["note:cex_disagrees"] = 1
 
         valuation = Valuation(
             product_key=key,
@@ -351,7 +396,7 @@ class PricingOracle:
             dispersion_cv=estimate.cv,
             price_p10=round(estimate.p10 * scale, 2),
             price_p90=round(estimate.p90 * scale, 2),
-            confidence=confidence_score(estimate, basis, priced_from, self.settings),
+            confidence=confidence,
             sell_through_pct=sell_through,
             est_days_to_sell=days_to_sell,
             sample=[
@@ -365,10 +410,40 @@ class PricingOracle:
                 )
                 for c in priced_from[: self.settings.valuation_sample_size]
             ],
-            reject_reasons=_merge_counts(selection.reject_counts(), note),
+            reject_reasons=reject_reasons,
             updated_at=datetime.now(UTC),
         )
+        _attach_cex(valuation, cex_quote)
         return await self._attach_amazon(valuation, listing)
+
+    async def _cex_quote(self, listing: Listing, query: str) -> CexQuote | None:
+        if self.cex is None or not self.settings.enable_cex:
+            return None
+        try:
+            return await self.cex.quote(listing.title, listing.condition, query=query)
+        except Exception as exc:  # an optional source must never break a run
+            log.warning("cex_quote_failed", title=listing.title, error=str(exc))
+            return None
+
+    def _cex_only_valuation(self, key: str, quote: CexQuote | None) -> Valuation | None:
+        """Price purely from CeX, when eBay comps were too thin to use."""
+        if quote is None:
+            return None
+        resale = round(quote.sell_price * self.settings.cex_to_ebay_ratio, 2)
+        valuation = Valuation(
+            product_key=key,
+            resale_price=resale,
+            basis=PriceBasis.CEX,
+            comp_count=quote.n_matched,
+            # A single retail price carries no distribution, so the range is
+            # widened by hand rather than implied to be tight.
+            price_p10=round(resale * 0.85, 2),
+            price_p90=round(resale * 1.15, 2),
+            confidence=round(_BASIS_TRUST[PriceBasis.CEX] * 0.6, 3),
+            updated_at=datetime.now(UTC),
+        )
+        _attach_cex(valuation, quote)
+        return valuation
 
     async def _attach_amazon(self, valuation: Valuation, listing: Listing) -> Valuation:
         """Optional Keepa leg. Off entirely unless an API key is configured."""
@@ -383,6 +458,28 @@ class PricingOracle:
             valuation.basis = PriceBasis.AMAZON
             valuation.confidence = round(_BASIS_TRUST[PriceBasis.AMAZON] * 0.6, 3)
         return valuation
+
+
+def _attach_cex(valuation: Valuation, quote: CexQuote | None) -> Valuation:
+    """Record CeX's two numbers on a valuation, whatever set the price."""
+    if quote is None:
+        return valuation
+    valuation.cex_sell_price = quote.sell_price
+    valuation.cex_cash_price = quote.cash_price
+    valuation.cex_match = quote.matched_name
+    return valuation
+
+
+def _disagrees(resale: float, quote: CexQuote, settings: Settings) -> bool:
+    """True when CeX's view of the price is far from ours.
+
+    Compared like for like: CeX's retail price is first discounted to the
+    private-sale level our estimate is expressed in.
+    """
+    cex_equivalent = quote.sell_price * settings.cex_to_ebay_ratio
+    if cex_equivalent <= 0 or resale <= 0:
+        return False
+    return abs(resale - cex_equivalent) / cex_equivalent > _DISAGREEMENT_TOLERANCE
 
 
 def _merge_counts(counts: dict[str, int], note: str) -> dict[str, int]:

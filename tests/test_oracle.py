@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from arb.db import Database
 from arb.models import Condition, PriceBasis, SoldObservation, Valuation
 from oracle.comps import Comp
 from oracle.ebay_client import parse_comps, parse_sold_search
@@ -360,3 +361,125 @@ async def test_oracle_watches_comps_so_their_endings_become_sold_data(settings, 
 
     key = product_key(listing.title, listing.brand, listing.model_number)
     assert db.count_live_comps(key) == 8
+
+
+# ------------------------------------------------------------------ CeX
+class FakeCex:
+    """Stands in for the CeX API."""
+
+    def __init__(self, quote):
+        self._quote = quote
+        self.calls = 0
+
+    async def quote(self, title, condition=Condition.UNKNOWN, query=None):
+        self.calls += 1
+        return self._quote
+
+    async def aclose(self):
+        pass
+
+
+def _cex_quote(sell: float, cash: float, name: str = "Apple iPhone 12 128GB"):
+    from oracle.cex_client import CexQuote
+
+    return CexQuote(
+        sell_price=sell,
+        cash_price=cash,
+        exchange_price=cash * 1.2,
+        matched_name=name,
+        box_id="X1",
+        grade="B",
+        n_matched=2,
+    )
+
+
+@pytest.mark.asyncio
+async def test_cex_prices_a_listing_ebay_could_not(settings, db):
+    """The cold-start case: too few eBay comps, but CeX knows the product."""
+    fake = FakeEbay(_active_comps(n=2))  # below min_comps
+    oracle = PricingOracle(
+        settings, db, ebay=fake, keepa=None, cex=FakeCex(_cex_quote(400.0, 240.0))
+    )
+
+    valuation = await oracle.get_valuation(make_listing())
+
+    assert valuation.basis == PriceBasis.CEX
+    assert valuation.resale_price == round(400.0 * settings.cex_to_ebay_ratio, 2)
+    assert valuation.cex_cash_price == 240.0
+    assert valuation.confidence > 0
+
+
+@pytest.mark.asyncio
+async def test_cex_cash_price_is_attached_even_when_ebay_sets_the_price(settings, db):
+    """The floor is useful regardless of which source won the basis."""
+    oracle = PricingOracle(
+        settings,
+        db,
+        ebay=FakeEbay(_active_comps()),
+        keepa=None,
+        cex=FakeCex(_cex_quote(460.0, 250.0)),
+    )
+
+    valuation = await oracle.get_valuation(make_listing())
+
+    assert valuation.basis == PriceBasis.ACTIVE
+    assert valuation.cex_cash_price == 250.0
+    assert valuation.cex_match == "Apple iPhone 12 128GB"
+
+
+@pytest.mark.asyncio
+async def test_disagreement_with_cex_costs_confidence(settings, db):
+    """Two independent sources disagreeing is exactly when to be less sure."""
+    agreeing = PricingOracle(
+        settings,
+        db,
+        ebay=FakeEbay(_active_comps()),
+        keepa=None,
+        cex=FakeCex(_cex_quote(410.0, 250.0)),
+    )
+    confident = await agreeing.get_valuation(make_listing())
+
+    db2 = Database(":memory:")
+    try:
+        disagreeing = PricingOracle(
+            settings,
+            db2,
+            ebay=FakeEbay(_active_comps()),
+            keepa=None,
+            cex=FakeCex(_cex_quote(900.0, 500.0)),
+        )
+        doubtful = await disagreeing.get_valuation(make_listing())
+    finally:
+        db2.close()
+
+    assert doubtful.confidence < confident.confidence
+
+
+@pytest.mark.asyncio
+async def test_a_broken_cex_never_breaks_a_valuation(settings, db):
+    class ExplodingCex:
+        async def quote(self, *args, **kwargs):
+            raise RuntimeError("cex is down")
+
+        async def aclose(self):
+            pass
+
+    oracle = PricingOracle(
+        settings, db, ebay=FakeEbay(_active_comps()), keepa=None, cex=ExplodingCex()
+    )
+    valuation = await oracle.get_valuation(make_listing())
+
+    assert valuation.basis == PriceBasis.ACTIVE
+    assert valuation.cex_cash_price is None
+
+
+@pytest.mark.asyncio
+async def test_cex_is_skipped_when_disabled(settings, db):
+    settings.enable_cex = False
+    fake_cex = FakeCex(_cex_quote(400.0, 240.0))
+    oracle = PricingOracle(
+        settings, db, ebay=FakeEbay(_active_comps()), keepa=None, cex=fake_cex
+    )
+
+    await oracle.get_valuation(make_listing())
+    assert fake_cex.calls == 0

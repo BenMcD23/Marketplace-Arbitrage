@@ -8,15 +8,17 @@ import pytest
 
 from arb.models import Condition
 from oracle.comps import Comp
+from oracle.ebay_client import CallBudget
 from oracle.sold_tracker import SOLD_INFERENCE_HAIRCUT, SoldTracker
 
 
 class FakeEbay:
     """Reports item liveness from a lookup table. None means 'could not tell'."""
 
-    def __init__(self, liveness: dict[str, bool | None]):
+    def __init__(self, liveness: dict[str, bool | None], daily_limit: int = 5000):
         self.liveness = liveness
         self.checks: list[str] = []
+        self.budget = CallBudget(daily_limit=daily_limit)
 
     async def item_is_live(self, item_id: str):
         self.checks.append(item_id)
@@ -155,3 +157,45 @@ async def test_liquidity_reports_sell_through_and_duration(settings, db):
 
 def test_liquidity_is_unknown_without_observations(settings, db):
     assert SoldTracker(settings, db).liquidity("nothing-here") == (None, None)
+
+
+# ------------------------------------------------------------------ budget
+def test_sweep_runs_hard_while_history_is_thin(settings, db):
+    """Idle API calls are days added to the cold start, so bootstrap spends more."""
+    tracker = SoldTracker(settings, db, FakeEbay({}))
+    assert tracker.sweep_budget() == settings.sold_sweep_bootstrap_checks
+
+
+def test_sweep_settles_once_there_is_enough_history(settings, db):
+    from arb.models import SoldObservation
+
+    settings.sold_bootstrap_threshold = 3
+    now = datetime.now(UTC)
+    for i in range(4):
+        db.record_sold(
+            SoldObservation(
+                item_id=f"obs-{i}",
+                product_key="k",
+                title="thing",
+                price=100.0,
+                first_seen_at=now,
+                sold_at=now,
+            )
+        )
+
+    tracker = SoldTracker(settings, db, FakeEbay({}))
+    assert tracker.sweep_budget() == settings.sold_sweep_max_checks
+
+
+def test_sweep_never_exceeds_the_remaining_daily_allowance(settings, db):
+    """The scan comes first; the sweep only gets what is actually left."""
+    ebay = FakeEbay({}, daily_limit=40)
+    ebay.budget.spend(35)
+    tracker = SoldTracker(settings, db, ebay)
+    assert tracker.sweep_budget() == 5
+
+
+def test_sweep_budget_is_zero_when_the_allowance_is_gone(settings, db):
+    ebay = FakeEbay({}, daily_limit=10)
+    ebay.budget.spend(10)
+    assert SoldTracker(settings, db, ebay).sweep_budget() == 0

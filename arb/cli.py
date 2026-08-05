@@ -6,6 +6,7 @@
     arb stats        print performance stats from the deals table
     arb serve        start the FastAPI server for the dashboard
     arb watch        list / add / remove the searches that get scanned
+    arb terapeak-login  sign in to eBay once and save the session (optional)
 """
 
 from __future__ import annotations
@@ -100,6 +101,19 @@ def cmd_watch(args: argparse.Namespace) -> None:
         db.close()
 
 
+def cmd_terapeak_login(args: argparse.Namespace) -> None:
+    from oracle.terapeak import interactive_login
+
+    settings = get_settings()
+    print(
+        "\nNote: automating the eBay site outside its published APIs is contrary\n"
+        "to eBay's User Agreement, and the account at risk is the one you sell on.\n"
+        "You are signing in yourself — no credentials are asked for or stored here,\n"
+        "only the resulting session cookies.\n"
+    )
+    asyncio.run(interactive_login(settings))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="arb", description="Marketplace arbitrage pipeline.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -129,6 +143,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_watch.add_argument("--category", help="eBay category id for the added search.")
     p_watch.add_argument("--max-price", type=float, dest="max_price", help="Max buy price.")
     p_watch.set_defaults(func=cmd_watch)
+
+    p_terapeak = sub.add_parser(
+        "terapeak-login", help="Sign in to eBay once and save a Terapeak session."
+    )
+    p_terapeak.set_defaults(func=cmd_terapeak_login)
 
     return parser
 
