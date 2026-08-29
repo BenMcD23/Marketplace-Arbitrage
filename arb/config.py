@@ -39,6 +39,21 @@ class Settings(BaseSettings):
     ebay_max_price: float | None = Field(default=None, description="Max BIN price to consider.")
     ebay_limit: int = Field(default=50, description="Max results per eBay query.")
 
+    # --- Mini / micro PC profile (home-server & k3s node hunting) ---
+    # Blank means "use the profile's built-in search terms" (profiles.mini_pc).
+    mini_pc_queries: str = Field(default="", description="Comma-separated overrides for the mini-PC search terms.")
+    mini_pc_limit: int = Field(default=50, description="Max results per mini-PC query.")
+    mini_pc_max_price: float | None = Field(default=250.0, description="eBay-side price ceiling for the profile.")
+    mini_pc_max_cpu_tdp_w: int = Field(default=35, description="Reject CPUs above this TDP (T-series only).")
+    mini_pc_min_ram_gb: int = Field(default=16, description="Target RAM; below this needs an exceptional price.")
+    mini_pc_hard_min_ram_gb: int = Field(default=8, description="Reject anything under this RAM outright.")
+    mini_pc_min_storage_gb: int = Field(default=128, description="Reject smaller storage unless price is exceptional.")
+    mini_pc_ram_upgrade_cost: float = Field(default=25.0, description="Estimated £ to fit a 16GB SO-DIMM.")
+    mini_pc_assumed_delivery: float = Field(default=8.0, description="Assumed £ delivery when eBay quotes it at checkout.")
+    mini_pc_strong_deal_max: float = Field(default=160.0, description="Total landed cost below this = 'strong deal'.")
+    mini_pc_exceptional_deal_max: float = Field(default=130.0, description="Total landed cost below this = 'exceptional deal'.")
+    mini_pc_include_broken: bool = Field(default=False, description="Include 'for parts or not working' listings.")
+
     # --- Keepa (Amazon data) ---
     keepa_api_key: str | None = None
     # Keepa domain id: 1=US, 2=UK, 3=DE ... default UK to match EBAY_GB.
@@ -81,6 +96,10 @@ class Settings(BaseSettings):
         return [q.strip() for q in self.ebay_queries.split(",") if q.strip()]
 
     @property
+    def mini_pc_query_list(self) -> list[str]:
+        return [q.strip() for q in self.mini_pc_queries.split(",") if q.strip()]
+
+    @property
     def scrape_query_list(self) -> list[str]:
         return [q.strip() for q in self.scrape_queries.split(",") if q.strip()]
 
@@ -93,6 +112,14 @@ class Settings(BaseSettings):
         min_delay = info.data.get("scrape_min_delay_sec", 0.0)
         if v < min_delay:
             raise ValueError("scrape_max_delay_sec must be >= scrape_min_delay_sec")
+        return v
+
+    @field_validator("mini_pc_exceptional_deal_max")
+    @classmethod
+    def _exceptional_below_strong(cls, v: float, info) -> float:
+        strong = info.data.get("mini_pc_strong_deal_max")
+        if strong is not None and v > strong:
+            raise ValueError("mini_pc_exceptional_deal_max must be <= mini_pc_strong_deal_max")
         return v
 
     @field_validator("tgtbt_ratio")
