@@ -1,0 +1,67 @@
+{
+  "itemSummaries": [
+    {
+      "itemId": "v1|300000001|0",
+      "title": "Dell OptiPlex 7060 Micro i5-8500T 16GB RAM 256GB SSD Win11 Mini PC",
+      "price": {"value": "134.00", "currency": "GBP"},
+      "condition": "Used",
+      "conditionId": "3000",
+      "buyingOptions": ["FIXED_PRICE", "BEST_OFFER"],
+      "shippingOptions": [{"shippingCostType": "FIXED", "shippingCost": {"value": "8.99", "currency": "GBP"}}],
+      "itemWebUrl": "https://www.ebay.co.uk/itm/300000001",
+      "image": {"imageUrl": "https://i.ebayimg.com/optiplex.jpg"},
+      "itemLocation": {"city": "London", "postalCode": "E1", "country": "GB"}
+    },
+    {
+      "itemId": "v1|300000002|0",
+      "title": "HP ProDesk 400 G6 Mini i7-10700T 32GB DDR4 512GB NVMe",
+      "subtitle": "Refurbished business desktop, free next-day delivery",
+      "price": {"value": "245.00", "currency": "GBP"},
+      "conditionId": "2000",
+      "buyingOptions": ["FIXED_PRICE"],
+      "shippingOptions": [{"shippingCostType": "FIXED", "shippingCost": {"value": "0.00", "currency": "GBP"}}],
+      "itemWebUrl": "https://www.ebay.co.uk/itm/300000002"
+    },
+    {
+      "itemId": "v1|300000003|0",
+      "title": "Lenovo ThinkCentre M70q Tiny i5-10400T 2x8GB DDR4 1TB SSD",
+      "price": {"value": "300.00", "currency": "GBP"},
+      "currentBidPrice": {"value": "96.00", "currency": "GBP"},
+      "bidCount": 7,
+      "itemEndDate": "2099-01-02T10:30:00.000Z",
+      "conditionId": "3000",
+      "buyingOptions": ["AUCTION"],
+      "shippingOptions": [{"shippingCostType": "CALCULATED"}],
+      "itemWebUrl": "https://www.ebay.co.uk/itm/300000003"
+    },
+    {
+      "itemId": "v1|300000004|0",
+      "title": "Dell OptiPlex 3070 Micro i5-9500 16GB 256GB SSD",
+      "price": {"value": "120.00", "currency": "GBP"},
+      "conditionId": "3000",
+      "buyingOptions": ["FIXED_PRICE"],
+      "shippingOptions": [{"shippingCostType": "FIXED", "shippingCost": {"value": "0.00", "currency": "GBP"}}],
+      "itemWebUrl": "https://www.ebay.co.uk/itm/300000004"
+    },
+    {
+      "itemId": "v1|300000005|0",
+      "title": "HP EliteDesk 800 G4 Mini i5-8500T 4GB RAM No HDD Spares or Repair",
+      "price": {"value": "45.00", "currency": "GBP"},
+      "conditionId": "7000",
+      "buyingOptions": ["FIXED_PRICE"],
+      "shippingOptions": [{"shippingCostType": "FIXED", "shippingCost": {"value": "6.50", "currency": "GBP"}}],
+      "itemWebUrl": "https://www.ebay.co.uk/itm/300000005"
+    },
+    {
+      "itemId": "v1|300000006|0",
+      "title": "Lenovo ThinkCentre Tiny i5-8500T 8GB 256GB SSD Collection Only",
+      "price": {"value": "300.00", "currency": "GBP"},
+      "bidCount": 0,
+      "conditionId": "3000",
+      "buyingOptions": ["AUCTION", "FIXED_PRICE"],
+      "pickupOptions": [{"pickupLocationType": "STORE"}],
+      "itemWebUrl": "https://www.ebay.co.uk/itm/300000006"
+    }
+  ],
+  "total": 6
+}

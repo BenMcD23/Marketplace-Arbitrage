@@ -39,3 +39,16 @@ class NullAlerter:
             url=listing.url,
         )
         return True
+
+    async def send_text(self, text: str, image_url: str | None = None) -> bool:
+        """Push a pre-rendered message (used by search profiles).
+
+        With notifications off this just logs the message that *would* have been
+        pushed, so the rendered format stays visible and a real alerter can be
+        dropped in without the profile changing.
+        """
+        if self.settings.dry_run:
+            log.info("dry_run_skip_alert")
+            return False
+        log.info("profile_alert", message=text)
+        return True

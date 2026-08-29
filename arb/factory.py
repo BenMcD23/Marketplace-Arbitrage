@@ -14,6 +14,7 @@ from oracle.keepa_client import KeepaClient
 from oracle.pricing import PricingOracle
 from sources.base import Source
 from sources.ebay import EbaySource
+from sources.ebay_mini_pc import MiniPcEbaySource
 
 log = get_logger("factory")
 
@@ -58,6 +59,14 @@ def build_sources(settings: Settings) -> list[Source]:
         sources.append(FacebookMarketplaceSource(settings, queries=settings.scrape_query_list))
 
     return sources
+
+
+def build_mini_pc_sources(settings: Settings, include_broken: bool = False) -> list[Source]:
+    """Sources for the mini-PC profile. Needs eBay credentials and nothing else."""
+    if not (settings.ebay_client_id and settings.ebay_client_secret):
+        log.warning("mini_pc_no_ebay_credentials")
+        return []
+    return [MiniPcEbaySource(settings, include_broken=include_broken)]
 
 
 def build_alerter(settings: Settings) -> NullAlerter:

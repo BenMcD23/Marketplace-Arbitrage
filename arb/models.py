@@ -8,7 +8,7 @@ know which site a listing came from.
 from __future__ import annotations
 
 import hashlib
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 
 from pydantic import BaseModel, Field
@@ -30,6 +30,32 @@ class SellChannel(str, Enum):
     AMAZON = "amazon"
 
 
+class ListingType(str, Enum):
+    """How the item is being sold. Auctions price off the current bid."""
+
+    FIXED_PRICE = "fixed_price"
+    AUCTION = "auction"
+    AUCTION_WITH_BIN = "auction_with_bin"
+
+
+class DeliveryKind(str, Enum):
+    """Where a listing's delivery cost came from.
+
+    `FREE` and `FIXED` are quoted by the seller and exact. `ESTIMATED` means the
+    site quotes delivery only at checkout, so the cost is a configured
+    assumption. `COLLECTION` means no delivery is offered at all.
+    """
+
+    FREE = "free"
+    FIXED = "fixed"
+    ESTIMATED = "estimated"
+    COLLECTION = "collection"
+
+    @property
+    def is_exact(self) -> bool:
+        return self in (DeliveryKind.FREE, DeliveryKind.FIXED, DeliveryKind.COLLECTION)
+
+
 def make_listing_id(source: str, source_listing_id: str) -> str:
     """Stable id = short hash of source + source listing id (dedup key)."""
     digest = hashlib.sha256(f"{source}:{source_listing_id}".encode()).hexdigest()
@@ -41,10 +67,19 @@ class Listing(BaseModel):
     source: str
     source_listing_id: str
     title: str
+    # Extra free text (subtitle / short description) that specs are often
+    # buried in when the title has run out of room.
+    description: str | None = None
     model_number: str | None = None
     brand: str | None = None
+    #: For auctions this is the *current bid*, never a starting-price placeholder.
     price: float
     shipping: float = 0.0
+    delivery_kind: DeliveryKind = DeliveryKind.FIXED
+    listing_type: ListingType = ListingType.FIXED_PRICE
+    best_offer: bool = False
+    bid_count: int | None = None
+    ends_at: datetime | None = None
     condition: Condition = Condition.UNKNOWN
     url: str
     image_url: str | None = None
@@ -59,7 +94,19 @@ class Listing(BaseModel):
 
     @property
     def buy_cost(self) -> float:
+        """Total landed cost: item price + delivery. Never compare on price alone."""
         return round(self.price + self.shipping, 2)
+
+    @property
+    def is_auction(self) -> bool:
+        return self.listing_type in (ListingType.AUCTION, ListingType.AUCTION_WITH_BIN)
+
+    def time_remaining(self, now: datetime | None = None) -> timedelta | None:
+        """Time left on an auction, or None if it has no end date / has ended."""
+        if self.ends_at is None:
+            return None
+        remaining = self.ends_at - (now or _utcnow())
+        return remaining if remaining.total_seconds() > 0 else None
 
 
 class Valuation(BaseModel):
