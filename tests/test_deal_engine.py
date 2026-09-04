@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from arb.models import Condition, SellChannel
 from engine.deals import estimate_p_sale, evaluate, score_deal
 from tests.conftest import make_listing, make_valuation
@@ -147,3 +149,39 @@ def test_score_is_bounded(settings):
         _candidate_channels(listing, val, settings), key=lambda c: c.expected_profit
     )
     assert 0.0 <= score_deal(result, val, settings) <= 100.0
+
+
+# Titles taken from a real run that alerted on all seven as 500-1900% "deals".
+SPARE_PART_TITLES = [
+    "For iPhone 12 Pro MAX Screen Replacement LCD/OLED Display Touch Screen Digitizer",
+    "For iPhone 12 Replacement LCD Touch Screen Digitizer Assembly Premium Quality UK",
+    'Official Genuine Apple (iPhone 12 Mini 5.4") Silicone Case MagSafe Cover - Black',
+    "For Apple iPhone 12 / 12 Pro Replacement Charging Port Flex (White) UK Stock",
+    "For iPhone 12 Earpiece Speaker Proximity Sensor Flex Cable Replacement -UK Stock",
+    "iPhone 12 / 12 Pro Replacement Top Ear Speaker Earpiece Module Top speaker UK",
+    "Original Battery Replacement For iPhone 12/12 Pro -With Adhesive",
+]
+
+
+@pytest.mark.parametrize("title", SPARE_PART_TITLES)
+def test_spare_parts_are_never_deals(title, settings):
+    """A part shares its product key with the handset, so it inherits the
+    handset's resale price. Without the accessory gate that reads as a 1600%
+    margin and alerts every time."""
+    listing = make_listing(title=title, price=9.99)
+    valuation = make_valuation(resale_price=167.25, confidence=0.54)
+    assert evaluate(listing, valuation, settings) is None
+
+
+@pytest.mark.parametrize(
+    "title",
+    [
+        "Apple iPhone 12 128GB Blue Unlocked Good Condition",
+        "Apple iPhone 12 Pro Max 256GB Graphite Unlocked",
+        "Sony WH-1000XM4 Wireless Headphones Black Boxed",
+    ],
+)
+def test_real_devices_still_pass_the_accessory_gate(title, settings):
+    listing = make_listing(title=title, price=100.0)
+    valuation = make_valuation(resale_price=250.0, confidence=0.8)
+    assert evaluate(listing, valuation, settings) is not None

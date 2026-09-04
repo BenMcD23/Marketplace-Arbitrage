@@ -22,7 +22,7 @@ class NullAlerter:
     async def aclose(self) -> None:
         return None
 
-    async def send_deal(self, deal: Deal, listing: Listing) -> bool:
+    async def send_deal(self, deal: Deal, listing: Listing, max_bid: float | None = None) -> bool:
         if self.settings.dry_run:
             log.info("dry_run_skip_alert", listing_id=listing.id)
             return False
@@ -36,6 +36,7 @@ class NullAlerter:
             est_profit=round(deal.est_profit, 2),
             roi_pct=round(deal.roi_pct, 1),
             is_scam_flag=deal.is_scam_flag,
+            max_bid=max_bid,
             url=listing.url,
         )
         return True

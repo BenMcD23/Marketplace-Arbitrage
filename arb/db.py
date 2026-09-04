@@ -51,7 +51,12 @@ CREATE TABLE IF NOT EXISTS listings (
     url                TEXT NOT NULL,
     image_url          TEXT,
     location           TEXT,
-    seen_at            TEXT NOT NULL
+    category_id        TEXT,
+    category_name      TEXT,
+    seen_at            TEXT NOT NULL,
+    is_auction         INTEGER NOT NULL DEFAULT 0,
+    end_time           TEXT,
+    bid_count          INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS valuations (
@@ -159,6 +164,7 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE INDEX IF NOT EXISTS idx_deals_flagged_at ON deals(flagged_at);
 CREATE INDEX IF NOT EXISTS idx_deals_score ON deals(score);
 CREATE INDEX IF NOT EXISTS idx_listings_source ON listings(source);
+CREATE INDEX IF NOT EXISTS idx_listings_auction ON listings(is_auction, end_time);
 CREATE INDEX IF NOT EXISTS idx_comp_watch_key ON comp_watch(product_key);
 CREATE INDEX IF NOT EXISTS idx_comp_watch_stale ON comp_watch(resolved, last_seen_at);
 CREATE INDEX IF NOT EXISTS idx_sold_key ON sold_observations(product_key, sold_at);
@@ -216,6 +222,19 @@ class Database:
             required = {"valuations": "cex_cash_price", "deals": "floor_profit"}[table]
             if expected_pk not in cols or required not in cols:
                 self._conn.execute(f"DROP TABLE {table}")
+
+        # `listings` is history, not cache — grow it in place.
+        for name, ddl in (
+            ("category_id", "TEXT"),
+            ("category_name", "TEXT"),
+            ("is_auction", "INTEGER NOT NULL DEFAULT 0"),
+            ("end_time", "TEXT"),
+            ("bid_count", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            try:
+                self._conn.execute(f"ALTER TABLE listings ADD COLUMN {name} {ddl}")
+            except sqlite3.OperationalError:
+                pass  # already there
         self._conn.commit()
 
     @contextmanager
@@ -240,15 +259,19 @@ class Database:
                 """
                 INSERT INTO listings
                     (id, source, source_listing_id, title, model_number, brand,
-                     price, shipping, condition, url, image_url, location, seen_at)
+                     price, shipping, condition, url, image_url, location, seen_at,
+                     category_id, category_name, is_auction, end_time, bid_count)
                 VALUES (:id, :source, :source_listing_id, :title, :model_number, :brand,
-                        :price, :shipping, :condition, :url, :image_url, :location, :seen_at)
+                        :price, :shipping, :condition, :url, :image_url, :location, :seen_at,
+                        :category_id, :category_name, :is_auction, :end_time, :bid_count)
                 ON CONFLICT(id) DO UPDATE SET
                     title=excluded.title, model_number=excluded.model_number,
                     brand=excluded.brand, price=excluded.price, shipping=excluded.shipping,
                     condition=excluded.condition, url=excluded.url,
                     image_url=excluded.image_url, location=excluded.location,
-                    seen_at=excluded.seen_at
+                    seen_at=excluded.seen_at, category_id=excluded.category_id,
+                    category_name=excluded.category_name, is_auction=excluded.is_auction,
+                    end_time=excluded.end_time, bid_count=excluded.bid_count
                 """,
                 {
                     "id": listing.id,
@@ -264,6 +287,11 @@ class Database:
                     "image_url": listing.image_url,
                     "location": listing.location,
                     "seen_at": _iso(listing.seen_at),
+                    "category_id": listing.category_id,
+                    "category_name": listing.category_name,
+                    "is_auction": int(listing.is_auction),
+                    "end_time": _iso(listing.end_time) if listing.end_time else None,
+                    "bid_count": listing.bid_count,
                 },
             )
 
@@ -274,6 +302,29 @@ class Database:
         return _row_to_listing(row) if row else None
 
     # ------------------------------------------------------------------ valuations
+    def due_auctions(self, within_hours: float, limit: int) -> list[Listing]:
+        """Auctions ending inside `within_hours` that have not been alerted on.
+
+        Soonest first: if the budget runs out mid-sweep, the ones that would
+        have expired unanalysed are the ones already covered.
+        """
+        now = datetime.now(UTC)
+        rows = self._conn.execute(
+            """
+            SELECT l.* FROM listings l
+            LEFT JOIN seen s ON s.listing_id = l.id
+            WHERE l.is_auction = 1
+              AND l.end_time IS NOT NULL
+              AND l.end_time > ?
+              AND l.end_time <= ?
+              AND COALESCE(s.alerted, 0) = 0
+            ORDER BY l.end_time ASC
+            LIMIT ?
+            """,
+            (_iso(now), _iso(now + timedelta(hours=within_hours)), limit),
+        ).fetchall()
+        return [_row_to_listing(r) for r in rows]
+
     def get_valuation(self, product_key: str, ttl_hours: int) -> Valuation | None:
         """Return a cached valuation only if it is fresh enough (within TTL)."""
         row = self._conn.execute(
@@ -691,6 +742,11 @@ def _row_to_listing(row: sqlite3.Row) -> Listing:
         image_url=row["image_url"],
         location=row["location"],
         seen_at=_parse_dt(row["seen_at"]) or datetime.now(UTC),
+        category_id=row["category_id"],
+        category_name=row["category_name"],
+        is_auction=bool(row["is_auction"]),
+        end_time=_parse_dt(row["end_time"]),
+        bid_count=row["bid_count"] or 0,
     )
 
 

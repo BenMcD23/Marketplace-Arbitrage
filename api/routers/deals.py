@@ -93,7 +93,9 @@ def list_deals(
                l.title AS l_title, l.model_number AS l_model_number, l.brand AS l_brand,
                l.price AS l_price, l.shipping AS l_shipping, l.condition AS l_condition,
                l.url AS l_url, l.image_url AS l_image_url, l.location AS l_location,
-               l.seen_at AS l_seen_at
+               l.seen_at AS l_seen_at, l.category_id AS l_category_id,
+               l.category_name AS l_category_name, l.is_auction AS l_is_auction,
+               l.end_time AS l_end_time, l.bid_count AS l_bid_count
         FROM deals d JOIN listings l ON l.id = d.listing_id
         WHERE {clause}
         ORDER BY {SORTABLE[sort]} {order.upper()}
@@ -151,5 +153,10 @@ def _listing_from_joined(row):
             "image_url": row["l_image_url"],
             "location": row["l_location"],
             "seen_at": row["l_seen_at"],
+            "category_id": row["l_category_id"],
+            "category_name": row["l_category_name"],
+            "is_auction": row["l_is_auction"],
+            "end_time": row["l_end_time"],
+            "bid_count": row["l_bid_count"],
         }
     )

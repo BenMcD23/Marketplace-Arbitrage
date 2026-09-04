@@ -275,7 +275,9 @@ class PricingOracle:
 
     async def get_valuation(self, listing: Listing) -> Valuation:
         """Value a listing, using the cache when it is still fresh."""
-        key = product_key(listing.title, listing.brand, listing.model_number)
+        key = product_key(
+            listing.title, listing.brand, listing.model_number, listing.category_id
+        )
 
         cached = self.db.get_valuation(key, ttl_hours=self.settings.valuation_ttl_hours)
         if cached is not None:
@@ -324,6 +326,7 @@ class PricingOracle:
             active_candidates,
             min_relevance=self.settings.min_comp_relevance,
             target_condition=listing.condition,
+            target_category_id=listing.category_id,
         )
         # Watch the surviving comps so their endings become tomorrow's sold data.
         self.tracker.record_active(key, active_sel.kept)
@@ -344,6 +347,7 @@ class PricingOracle:
             insights_sold + own_sold + terapeak_comps,
             min_relevance=self.settings.min_comp_relevance,
             target_condition=listing.condition,
+            target_category_id=listing.category_id,
         )
 
         # CeX is queried regardless of which basis wins: even when it does not

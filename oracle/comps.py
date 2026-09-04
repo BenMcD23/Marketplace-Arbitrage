@@ -29,8 +29,12 @@ from arb.models import Condition
 # ---------------------------------------------------------------------------
 
 # Phrases that almost always mean "this is not the device itself". Matched as
-# whole words against the lowercased title. Kept deliberately conservative:
-# a false reject only costs us one comp, but a false accept poisons the median.
+# whole words against the lowercased title.
+#
+# This list guards two things: which comps are allowed to set a price, and (via
+# the deal engine) which listings are allowed to be deals at all. A false accept
+# is the expensive one — an £8 charging-port flex priced as a £167 handset is a
+# 1600% "profit" that alerts every time.
 _ACCESSORY_TERMS = {
     # protection & carry
     "case", "cases", "cover", "covers", "sleeve", "pouch", "holster",
@@ -39,9 +43,11 @@ _ACCESSORY_TERMS = {
     "cable", "cables", "charger", "chargers", "charging dock", "dock",
     "adapter", "adaptor", "power supply", "psu", "usb cable", "lead",
     # spares & salvage
-    "replacement screen", "lcd", "digitizer", "digitiser", "back glass",
-    "battery replacement", "motherboard", "logic board", "housing",
-    "flex cable", "camera lens", "rear glass", "spare parts", "repair kit",
+    "replacement", "lcd", "oled", "digitizer", "digitiser", "back glass",
+    "motherboard", "logic board", "housing", "chassis", "midframe",
+    "flex", "camera lens", "rear glass", "spare parts", "repair kit",
+    "earpiece", "charging port", "proximity sensor", "adhesive", "loudspeaker",
+    "assembly", "hinge", "swivel", "headband", "ear pad", "earpad", "ear cushion",
     # packaging & documentation
     "empty box", "box only", "boxed empty", "manual only", "instructions only",
     "receipt", "packaging only",
@@ -50,6 +56,12 @@ _ACCESSORY_TERMS = {
     # listings that price several units
     "job lot", "joblot", "bundle of", "wholesale", "pallet",
 }
+
+# "For iPhone 12 ...", "Fits Samsung S21 ...". A part is sold *for* a device; the
+# device itself is sold by name. This one pattern catches the whole long tail of
+# spares whose specific component word we have not listed — and it is safe,
+# because a genuine handset listing never opens this way.
+_FOR_DEVICE_RE = re.compile(r"^\s*(?:for|fits|compatible with)\b", re.I)
 
 # Multi-unit patterns: "x10", "10x", "lot of 5", "set of 3", "pack of 4".
 _MULTI_UNIT_RE = re.compile(
@@ -79,6 +91,8 @@ class Comp:
     condition: Condition = Condition.UNKNOWN
     item_id: str | None = None
     url: str | None = None
+    #: Marketplace leaf category, when the source reports one.
+    category_id: str | None = None
     #: Set when this comp is an observed sale rather than an asking price.
     sold: bool = False
     #: Populated by `select_comps`.
@@ -113,7 +127,7 @@ def tokenize(title: str) -> list[str]:
 def is_accessory(title: str) -> bool:
     """True when the title looks like an accessory, spare part or multi-pack."""
     low = title.lower()
-    if _MULTI_UNIT_RE.search(low):
+    if _FOR_DEVICE_RE.match(low) or _MULTI_UNIT_RE.search(low):
         return True
     words = set(re.findall(r"[a-z]+", low))
     for term in _ACCESSORY_TERMS:
@@ -206,6 +220,7 @@ def select_comps(
     candidates: list[Comp],
     min_relevance: float = 0.6,
     target_condition: Condition = Condition.UNKNOWN,
+    target_category_id: str | None = None,
 ) -> CompSelection:
     """Filter and score candidate comps against the listing being valued.
 
@@ -213,6 +228,11 @@ def select_comps(
     adjustment downstream, where a small same-condition sample can still beat a
     large mixed one — but parts/salvage comps are always dropped because their
     prices describe a different market.
+
+    `target_category_id` is the strongest filter here when the source provides
+    one. Token overlap cannot tell "PS5 console" from "PS5 controller" — both
+    are Sony, both say PS5 — but eBay files them under different categories and
+    is rarely wrong about it.
     """
     selection = CompSelection()
     target_tokens = tokenize(target_title)
@@ -221,6 +241,16 @@ def select_comps(
     for comp in candidates:
         if comp.price is None or comp.price <= 0:
             selection.rejected.append((comp, "no_price"))
+            continue
+
+        # Category first: it is cheaper and far more reliable than the title
+        # heuristics below. Only applied when both sides state one.
+        if (
+            target_category_id
+            and comp.category_id
+            and comp.category_id != target_category_id
+        ):
+            selection.rejected.append((comp, "different_category"))
             continue
 
         if is_accessory(comp.title):

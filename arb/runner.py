@@ -62,7 +62,13 @@ async def run_once(
             sources = build_sources(settings, db, ebay=ebay)
 
             if not sources:
-                log.warning("no_sources_enabled")
+                log.warning(
+                    "no_sources_enabled",
+                    hint=(
+                        "check EBAY_CLIENT_ID/EBAY_CLIENT_SECRET are set and that "
+                        "`arb watch` lists at least one search"
+                    ),
+                )
 
             pipeline = Pipeline(settings, db, oracle, alerter)
             stats = await pipeline.run(sources, run_id=run_id)

@@ -131,7 +131,12 @@ _KEY_NOISE = {
 _CAPACITY_KEY_RE = re.compile(r"\b(\d+)\s?(gb|tb)\b", re.I)
 
 
-def product_key(title: str, brand: str | None = None, model_number: str | None = None) -> str:
+def product_key(
+    title: str,
+    brand: str | None = None,
+    model_number: str | None = None,
+    category_id: str | None = None,
+) -> str:
     """A canonical grouping key for "the same product".
 
     Valuations are cached against this key and observed sales are grouped by it,
@@ -144,11 +149,21 @@ def product_key(title: str, brand: str | None = None, model_number: str | None =
     title: brand, any extracted model number, the capacity, and the tokens that
     contain digits (in electronics the numbers *are* the product). Tokens are
     sorted so word order cannot fork the key.
+
+    That last rule has one blind spot, and it is expensive: around an ecosystem
+    brand the console, its games and its accessories all carry the same number,
+    so "PS5 console", "PS5 controller" and "Astro Bot for PS5" collapse onto one
+    key and the accessories inherit the console's price. The marketplace's own
+    category id, when we have one, is prepended to keep those apart — it is the
+    one signal that reliably separates a device from the things that plug into
+    it.
     """
     brand = brand or extract_brand(title)
     model_number = model_number or extract_model_number(title)
 
     parts: set[str] = set()
+    if category_id:
+        parts.add(f"cat{category_id}")
     if brand:
         parts.add(brand.lower())
     if model_number:

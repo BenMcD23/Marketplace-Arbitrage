@@ -27,6 +27,7 @@ from arb.config import Settings
 from arb.logging_conf import get_logger
 from arb.models import Condition, Deal, Listing, PriceBasis, SellChannel, Valuation
 from engine.fees import ProfitBreakdown, profit_at
+from oracle.comps import is_accessory
 
 log = get_logger("engine.deals")
 
@@ -246,14 +247,35 @@ def _build_deal(
     )
 
 
-def evaluate(listing: Listing, valuation: Valuation, settings: Settings) -> Deal | None:
+class _Silent:
+    """Swallows log calls. `max_bid` probes `evaluate` ~30 times per auction and
+    every probe would otherwise report a verdict at INFO."""
+
+    def info(self, *a, **k) -> None: ...
+    def debug(self, *a, **k) -> None: ...
+
+
+_SILENT = _Silent()
+
+
+def evaluate(
+    listing: Listing, valuation: Valuation, settings: Settings, *, quiet: bool = False
+) -> Deal | None:
     """Evaluate a listing against its valuation. Returns a Deal or None.
 
     A returned Deal may carry `is_scam_flag=True` — those are recorded for
     review rather than treated as buys.
     """
+    out = _SILENT if quiet else log
     if listing.condition == Condition.FOR_PARTS and not settings.allow_for_parts:
-        log.debug("reject_for_parts", listing_id=listing.id)
+        out.debug("reject_for_parts", listing_id=listing.id)
+        return None
+
+    # A spare part shares its product key with the device it fits, so without
+    # this it inherits the handset's resale price and reads as a 1600% margin.
+    # Same test that keeps accessories out of the comp set.
+    if is_accessory(listing.title):
+        out.debug("reject_accessory", listing_id=listing.id, title=listing.title)
         return None
 
     candidates = _candidate_channels(listing, valuation, settings)
@@ -267,7 +289,7 @@ def evaluate(listing: Listing, valuation: Valuation, settings: Settings) -> Deal
     # produced it, so the reported numbers always describe the same channel the
     # ratio was computed from.
     if listing.buy_cost < settings.tgtbt_ratio * best.est_resale:
-        log.info(
+        out.info(
             "scam_flag",
             listing_id=listing.id,
             buy_cost=listing.buy_cost,
@@ -288,18 +310,18 @@ def evaluate(listing: Listing, valuation: Valuation, settings: Settings) -> Deal
 
     # --- Gates ------------------------------------------------------------
     if valuation.confidence < settings.min_confidence:
-        log.debug(
+        out.debug(
             "reject_low_confidence", listing_id=listing.id, confidence=valuation.confidence
         )
         return None
     if best.expected.profit < settings.min_profit:
-        log.debug("reject_below_min_profit", listing_id=listing.id, profit=best.expected.profit)
+        out.debug("reject_below_min_profit", listing_id=listing.id, profit=best.expected.profit)
         return None
     if best.expected.roi_pct < settings.min_roi:
-        log.debug("reject_below_min_roi", listing_id=listing.id, roi=best.expected.roi_pct)
+        out.debug("reject_below_min_roi", listing_id=listing.id, roi=best.expected.roi_pct)
         return None
     if best.expected_profit < settings.min_expected_profit:
-        log.debug(
+        out.debug(
             "reject_below_min_expected_profit",
             listing_id=listing.id,
             expected=best.expected_profit,
@@ -308,10 +330,10 @@ def evaluate(listing: Listing, valuation: Valuation, settings: Settings) -> Deal
 
     score = score_deal(best, valuation, settings)
     if score < settings.min_score:
-        log.debug("reject_below_min_score", listing_id=listing.id, score=score)
+        out.debug("reject_below_min_score", listing_id=listing.id, score=score)
         return None
 
-    log.info(
+    out.info(
         "deal_flagged",
         listing_id=listing.id,
         channel=best.channel.value,
@@ -400,3 +422,42 @@ def explain(
             "wrong variants or outliers."
         )
     return notes
+
+
+def max_bid(listing: Listing, valuation: Valuation, settings: Settings) -> float:
+    """The highest bid on `listing` that still clears every configured gate.
+
+    Found by bisection on `evaluate` rather than by inverting the fee maths, so
+    the number can never drift away from the thresholds the scanner actually
+    uses — change MIN_ROI and the max bid moves with it. `evaluate` is pure
+    arithmetic, so ~30 probes cost nothing.
+
+    Bisection starts just above the too-good-to-be-true floor. That gate fires
+    on a price being implausibly *low*, so below the floor `evaluate` keeps
+    returning a (scam-flagged) Deal and a naive search would happily converge on
+    the floor itself — reporting the scam threshold as a bid ceiling.
+
+    Returns 0.0 when no bid works: the valuation is too weak, the item fails a
+    gate unrelated to price, or the only profitable bids are implausibly low.
+    """
+    hi = valuation.resale_price or 0.0
+    if hi <= 0:
+        return 0.0
+
+    def viable(bid: float) -> bool:
+        deal = evaluate(
+            listing.model_copy(update={"price": bid}), valuation, settings, quiet=True
+        )
+        return deal is not None and not deal.is_scam_flag
+
+    lo = max(0.0, settings.tgtbt_ratio * hi - listing.shipping) + 0.01
+    if lo >= hi or not viable(lo):
+        return 0.0
+
+    while hi - lo > 0.01:
+        mid = (lo + hi) / 2
+        if viable(mid):
+            lo = mid
+        else:
+            hi = mid
+    return round(lo, 2)

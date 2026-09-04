@@ -52,8 +52,8 @@ class RecordingAlerter:
     def __init__(self):
         self.sent = []
 
-    async def send_deal(self, deal, listing):
-        self.sent.append((deal, listing))
+    async def send_deal(self, deal, listing, max_bid=None):
+        self.sent.append((deal, listing, max_bid))
         return True
 
     async def aclose(self):
@@ -141,3 +141,21 @@ async def test_exhausted_budget_stops_the_run_cleanly(settings, db):
     assert stats.budget_exhausted is True
     # Nothing after the exhausted source is attempted.
     assert stats.listings_scanned == 0
+
+
+@pytest.mark.asyncio
+async def test_dry_run_does_not_consume_the_dedup(settings, db):
+    """`--dry` is for tuning thresholds, which means re-running the same
+    listings after each change. Marking them seen would allow exactly one."""
+    settings.dry_run = True
+    pipeline = Pipeline(
+        settings, db, FakeOracle(settings, db, make_valuation()), RecordingAlerter()
+    )
+
+    stats = await pipeline.run([FakeSource([_listing()])])
+    assert stats.new_listings == 1
+    assert not db.is_seen(_listing().id)
+
+    # Same listing, second dry run: still evaluated.
+    stats = await pipeline.run([FakeSource([_listing()])])
+    assert stats.new_listings == 1

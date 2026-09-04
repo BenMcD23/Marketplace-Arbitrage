@@ -73,7 +73,19 @@ class Listing(BaseModel):
     url: str
     image_url: str | None = None
     location: str | None = None
+    #: The marketplace's own leaf category, e.g. "139971" (Video Game Consoles)
+    #: vs "117042" (Controllers). The single most reliable signal for "is this
+    #: the device or something that plugs into it" — free, and already in every
+    #: search response.
+    category_id: str | None = None
+    category_name: str | None = None
     seen_at: datetime = Field(default_factory=_utcnow)
+
+    #: Auctions. `price` holds the current bid, so it moves between runs — which
+    #: is why an auction is priced near its end rather than when first seen.
+    is_auction: bool = False
+    end_time: datetime | None = None
+    bid_count: int = 0
 
     def model_post_init(self, __context) -> None:  # noqa: D401
         # `id` is derived from source + source_listing_id so the same real-world

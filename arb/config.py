@@ -195,6 +195,23 @@ class Settings(BaseSettings):
     scrape_queries: str = Field(default="", description="Comma-separated scraper search terms.")
     scrape_max_price: float | None = Field(default=None, description="Max price for scrapers.")
 
+    # --- Auctions -------------------------------------------------------
+    #: eBay has no public bidding API, so auctions are alerted, not bid on.
+    #: The alert fires once, `auction_bid_lead_hours` before the end, when the
+    #: standing price is finally worth something as a signal.
+    enable_auctions: bool = Field(default=True, description="Include auction listings.")
+    auction_bid_lead_hours: float = Field(
+        default=12.0, description="Hours before an auction ends to price it and alert."
+    )
+    auction_sweep_max_checks: int = Field(
+        default=50, description="Max auction price refreshes per run (1 API call each)."
+    )
+
+    # --- Discord alerts --------------------------------------------------
+    discord_webhook_url: str | None = Field(
+        default=None, description="Discord webhook to post deals to. Unset = no alerts."
+    )
+
     # --- Pipeline behaviour ---------------------------------------------
     dry_run: bool = Field(default=False, description="Scan + evaluate but never send alerts.")
 
@@ -214,6 +231,29 @@ class Settings(BaseSettings):
     def daily_capital_cost_pct(self) -> float:
         """Cost of capital per day, as a fraction."""
         return self.capital_annual_cost_pct / 100.0 / 365.0
+
+    @field_validator(
+        "ebay_max_price", "ebay_fvf_cap", "scrape_max_price", "keepa_api_key",
+        "ebay_category_id", "ebay_client_id", "ebay_client_secret",
+        "discord_webhook_url", mode="before"
+    )
+    @classmethod
+    def _blank_is_none(cls, v):
+        # A .env line like `EBAY_MAX_PRICE=      # optional` arrives as the bare
+        # comment (dotenv only strips a trailing comment when there is a value).
+        if isinstance(v, str) and (not v.strip() or v.lstrip().startswith("#")):
+            return None
+        return v
+
+    @field_validator("ebay_queries", "scrape_queries", mode="before")
+    @classmethod
+    def _comment_is_empty(cls, v):
+        # Same dotenv quirk as `_blank_is_none`, but these are comma-separated
+        # lists: left alone, `# e.g. "iphone 12,ps5"` seeds the watch list with
+        # a search for `# e.g. "iphone 12`.
+        if isinstance(v, str) and v.lstrip().startswith("#"):
+            return ""
+        return v
 
     @field_validator("scrape_max_delay_sec")
     @classmethod

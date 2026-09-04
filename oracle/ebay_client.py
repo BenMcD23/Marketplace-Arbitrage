@@ -122,6 +122,17 @@ def _extract_shipping(item: dict[str, Any]) -> float:
     return 0.0
 
 
+def item_category(item: dict[str, Any]) -> tuple[str | None, str | None]:
+    """The item's leaf category id and name, when eBay reports one."""
+    cats = item.get("categories") or []
+    if not cats:
+        cid = item.get("categoryId")
+        return (str(cid) if cid else None), None
+    leaf = cats[0]
+    cid = leaf.get("categoryId")
+    return (str(cid) if cid else None), leaf.get("categoryName")
+
+
 def item_condition(item: dict[str, Any]) -> Condition:
     raw = item.get("condition")
     if not raw:
@@ -151,6 +162,7 @@ def parse_comps(payload: dict[str, Any], sold: bool = False) -> list[Comp]:
                 condition=item_condition(item),
                 item_id=str(item.get("itemId") or item.get("legacyItemId") or ""),
                 url=item.get("itemWebUrl"),
+                category_id=item_category(item)[0],
                 sold=sold,
             )
         )
@@ -240,9 +252,16 @@ class EbayClient:
         min_price: float | None = None,
         conditions: list[str] | None = None,
         offset: int = 0,
+        buying_options: str = "FIXED_PRICE",
     ) -> dict[str, Any]:
-        """Raw Browse item_summary/search call. Returns the decoded payload."""
-        filters = ["buyingOptions:{FIXED_PRICE}"]
+        """Raw Browse item_summary/search call. Returns the decoded payload.
+
+        `buying_options` takes one eBay value at a time ("FIXED_PRICE" or
+        "AUCTION") rather than both at once. Best Match ranks auctions far below
+        buy-it-now, so a combined search returns a full page of BIN and no
+        auctions at all — they have to be asked for separately.
+        """
+        filters = [f"buyingOptions:{{{buying_options}}}"]
         if max_price is not None or min_price is not None:
             lo = "" if min_price is None else str(min_price)
             hi = "" if max_price is None else str(max_price)
@@ -287,6 +306,25 @@ class EbayClient:
             log.warning("ebay_comp_search_error", query=query, error=str(exc))
             return []
         return parse_comps(payload)
+
+    async def get_item(self, item_id: str) -> dict[str, Any] | None:
+        """Full Browse item record, or None if it could not be fetched.
+
+        One API call. Used to re-read an auction's standing price shortly
+        before it ends, since the price in the search result is already stale.
+        """
+        try:
+            headers = await self._headers()
+            self.budget.spend()
+            resp = await self._client.get(f"{ITEM_URL}/{item_id}", headers=headers)
+        except BudgetExhausted:
+            raise
+        except httpx.HTTPError as exc:
+            log.warning("ebay_item_fetch_error", item_id=item_id, error=str(exc))
+            return None
+        if resp.status_code >= 400:
+            return None
+        return resp.json()
 
     async def item_is_live(self, item_id: str) -> bool | None:
         """Whether a Browse item is still available.

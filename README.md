@@ -212,6 +212,28 @@ that is how eBay actually charges. **Tune them to your real seller fees** —
 optimistic fees turn losers into false "deals", and you find out weeks later
 from the payouts.
 
+## Auctions and Discord alerts
+
+eBay has no public bidding API, so the pipeline never bids. It watches, and it
+tells you what to bid.
+
+An auction's price today says nothing about its price at the hammer, so an
+auction found in a scan is stored and then **deliberately ignored** until it is
+`AUCTION_BID_LEAD_HOURS` (default 12) from ending. At that point the sweep
+re-reads its standing price from eBay — one API call, and the first moment the
+price is worth acting on — values it, and works out a **max bid**.
+
+The max bid is found by bisecting on the deal engine itself rather than by
+inverting the fee maths, so it can never drift away from the thresholds the
+scanner uses: raise `MIN_ROI` and the bid ceiling drops to match. Bidding above
+it is bidding past the point where the flip pays. If the standing bid has
+already passed the ceiling, the auction is dropped silently rather than alerted.
+
+Alerts go to a Discord webhook — set `DISCORD_WEBHOOK_URL` (Server Settings →
+Integrations → Webhooks → New Webhook → Copy URL) and they are on; leave it
+blank and deals are only stored and shown in the dashboard. Each auction alert
+leads with the bid ceiling and a countdown to the close.
+
 ## Commands
 
 ```bash
@@ -223,6 +245,7 @@ arb serve                  # start the API for the dashboard
 arb watch                  # list watched searches
 arb watch --add "ps5" --max-price 250
 arb watch --remove 3
+arb test-alert             # post one fake deal to Discord to check the webhook
 arb terapeak-login         # optional: save an eBay session for Terapeak
 ```
 

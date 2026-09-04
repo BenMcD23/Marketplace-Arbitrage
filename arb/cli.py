@@ -6,6 +6,7 @@
     arb stats        print performance stats from the deals table
     arb serve        start the FastAPI server for the dashboard
     arb watch        list / add / remove the searches that get scanned
+    arb test-alert   post one fake deal to Discord to check the webhook
     arb terapeak-login  sign in to eBay once and save the session (optional)
 """
 
@@ -101,6 +102,55 @@ def cmd_watch(args: argparse.Namespace) -> None:
         db.close()
 
 
+def cmd_test_alert(args: argparse.Namespace) -> None:
+    """Post one made-up auction deal, to prove the webhook before a real run."""
+    from datetime import UTC, datetime, timedelta
+
+    from arb.factory import build_alerter
+    from arb.models import Condition, Listing, PriceBasis, Valuation
+    from engine.deals import evaluate, max_bid
+
+    settings = get_settings()
+    if not settings.discord_webhook_url:
+        print("DISCORD_WEBHOOK_URL is not set in .env — nothing to test.")
+        return
+    settings.dry_run = False  # the whole point of this command is to send
+
+    listing = Listing(
+        source="ebay",
+        source_listing_id="test-alert",
+        title="TEST ALERT — Apple iPhone 12 128GB",
+        brand="Apple",
+        price=60.0,
+        shipping=4.0,
+        condition=Condition.USED,
+        url="https://www.ebay.co.uk/",
+        is_auction=True,
+        bid_count=3,
+        end_time=datetime.now(UTC) + timedelta(hours=6),
+    )
+    valuation = Valuation(
+        product_key="test",
+        resale_price=300.0,
+        basis=PriceBasis.SOLD,
+        comp_count=12,
+        confidence=0.8,
+    )
+    deal = evaluate(listing, valuation, settings)
+    if deal is None:
+        print("The sample deal did not clear your thresholds — loosen them or check .env.")
+        return
+
+    async def go() -> bool:
+        alerter = build_alerter(settings)
+        try:
+            return await alerter.send_deal(deal, listing, max_bid(listing, valuation, settings))
+        finally:
+            await alerter.aclose()
+
+    print("sent — check Discord" if asyncio.run(go()) else "failed — see the log above")
+
+
 def cmd_terapeak_login(args: argparse.Namespace) -> None:
     from oracle.terapeak import interactive_login
 
@@ -143,6 +193,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_watch.add_argument("--category", help="eBay category id for the added search.")
     p_watch.add_argument("--max-price", type=float, dest="max_price", help="Max buy price.")
     p_watch.set_defaults(func=cmd_watch)
+
+    p_test = sub.add_parser("test-alert", help="Post one fake deal to Discord.")
+    p_test.set_defaults(func=cmd_test_alert)
 
     p_terapeak = sub.add_parser(
         "terapeak-login", help="Sign in to eBay once and save a Terapeak session."

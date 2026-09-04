@@ -10,6 +10,7 @@ budget instead of racing each other through it.
 
 from __future__ import annotations
 
+from alerts.discord import DiscordAlerter
 from alerts.null import NullAlerter
 from arb.config import Settings
 from arb.db import Database
@@ -116,7 +117,12 @@ def build_sources(
                 )
             )
         else:
-            log.warning("no_watch_queries")
+            # The one failure mode that looks like a crash but is just an empty
+            # list, so it says exactly how to fix itself.
+            log.warning(
+                "no_watch_queries",
+                hint="nothing to scan — add one with:  arb watch --add 'iphone 12'",
+            )
 
     # Scraper sources are imported lazily so Playwright isn't required unless
     # they are actually switched on.
@@ -133,6 +139,9 @@ def build_sources(
     return sources
 
 
-def build_alerter(settings: Settings) -> NullAlerter:
-    # Notifications are off — deals are stored and surfaced in the UI.
+def build_alerter(settings: Settings) -> DiscordAlerter | NullAlerter:
+    # A configured webhook is the whole switch: no URL, no notifications, and
+    # deals are still stored and surfaced in the UI either way.
+    if settings.discord_webhook_url:
+        return DiscordAlerter(settings)
     return NullAlerter(settings)

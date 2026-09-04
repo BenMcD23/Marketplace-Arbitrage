@@ -82,7 +82,7 @@ async def test_ebay_source_fetches_each_watched_query():
         )
     )
 
-    settings = Settings(_env_file=None)
+    settings = Settings(_env_file=None, enable_auctions=False)
     client = EbayClient("id", "secret")
     source = EbaySource(
         settings,
@@ -110,7 +110,7 @@ async def test_ebay_source_skips_disabled_queries():
     )
 
     source = EbaySource(
-        Settings(_env_file=None),
+        Settings(_env_file=None, enable_auctions=False),
         queries=[WatchQuery(query="on"), WatchQuery(query="off", enabled=False)],
         client=EbayClient("id", "secret"),
     )
@@ -120,3 +120,31 @@ async def test_ebay_source_skips_disabled_queries():
         await source.aclose()
 
     assert route.call_count == 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_auctions_need_their_own_search():
+    """Best Match buries auctions under buy-it-now, so a combined filter returns
+    a page of BIN and no auctions. They are asked for in a second call."""
+    respx.post("https://api.ebay.com/identity/v1/oauth2/token").mock(
+        return_value=httpx.Response(200, json={"access_token": "tok", "expires_in": 7200})
+    )
+    route = respx.get("https://api.ebay.com/buy/browse/v1/item_summary/search").mock(
+        return_value=httpx.Response(200, json={"itemSummaries": []})
+    )
+
+    source = EbaySource(
+        Settings(_env_file=None, enable_auctions=True),
+        queries=[WatchQuery(query="iphone 12")],
+        client=EbayClient("id", "secret"),
+    )
+    try:
+        [listing async for listing in source.fetch()]
+    finally:
+        await source.aclose()
+
+    assert route.call_count == 2
+    asked = [str(call.request.url) for call in route.calls]
+    assert any("FIXED_PRICE" in url and "AUCTION" not in url for url in asked)
+    assert any("AUCTION" in url and "FIXED_PRICE" not in url for url in asked)

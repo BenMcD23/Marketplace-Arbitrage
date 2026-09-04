@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from arb.models import Condition
 from oracle.comps import (
+    Comp,
     extract_capacity,
     is_accessory,
     relevance,
@@ -101,3 +102,48 @@ def test_kept_comps_are_sorted_by_relevance():
     ]
     result = select_comps("Apple iPhone 12 128GB", candidates, min_relevance=0.4)
     assert result.kept[0].relevance >= result.kept[-1].relevance
+
+
+def test_category_separates_a_console_from_its_accessories():
+    """The failure this exists to prevent: around an ecosystem brand the
+    console, its games and its accessories all carry the same number, so
+    token-based keys collapse them together and the £15 game inherits the
+    £375 console's resale price."""
+    from sources.normalise import extract_brand, extract_model_number, product_key
+
+    def key(title, category_id):
+        return product_key(title, extract_brand(title), extract_model_number(title), category_id)
+
+    console = key("Sony PlayStation 5 Console 825GB", "139971")
+    controller = key("Sony PS5 DualSense Wireless Controller White", "117042")
+    game = key("Astro Bot for PS5 PlayStation 5 Video Game by Sony", "139973")
+    cable = key("PS5 Charging & Play USB Charger Cable Lead", "171814")
+
+    assert len({console, controller, game, cable}) == 4
+
+    # Two listings of the same thing still share a key.
+    assert key("Sony PS5 DualSense Wireless Controller GTA VI Edition", "117042") == controller
+
+
+def test_comps_from_a_different_category_are_rejected():
+    target = "Sony PlayStation 5 Console 825GB"
+    candidates = [
+        Comp(title="Sony PlayStation 5 Console 825GB Disc", price=380.0, category_id="139971"),
+        Comp(title="Sony PlayStation 5 Console Digital", price=340.0, category_id="139971"),
+        Comp(title="Sony PS5 DualSense Controller", price=45.0, category_id="117042"),
+        Comp(title="PlayStation 5 Astro Bot Game", price=30.0, category_id="139973"),
+    ]
+    selection = select_comps(target, candidates, min_relevance=0.3, target_category_id="139971")
+
+    assert len(selection.kept) == 2
+    assert selection.reject_counts()["different_category"] == 2
+
+
+def test_category_filtering_is_skipped_when_either_side_is_unknown():
+    """Scraper sources report no category; they must not be filtered to nothing."""
+    candidates = [Comp(title="Sony PlayStation 5 Console 825GB", price=380.0)]
+    selection = select_comps(
+        "Sony PlayStation 5 Console 825GB", candidates, min_relevance=0.3,
+        target_category_id="139971",
+    )
+    assert len(selection.kept) == 1
