@@ -8,6 +8,7 @@
     arb watch        list / add / remove the searches that get scanned
     arb test-alert   post one fake deal to Discord to check the webhook
     arb terapeak-login  sign in to eBay once and save the session (optional)
+    arb auctions backfill|report|scan   auction houses as a buy side
 """
 
 from __future__ import annotations
@@ -164,6 +165,29 @@ def cmd_terapeak_login(args: argparse.Namespace) -> None:
     asyncio.run(interactive_login(settings))
 
 
+def cmd_auctions(args: argparse.Namespace) -> None:
+    from arb.factory import build_oracle
+    from houses import analysis
+    from houses.store import LotStore
+
+    settings = get_settings()
+    store = LotStore(settings.db_path)
+
+    async def go() -> str:
+        if args.action == "backfill":
+            stats = await analysis.backfill(settings, store, auctions=args.auctions)
+            return json.dumps(stats, indent=2)
+        oracle = build_oracle(settings, Database(settings.db_path))
+        try:
+            if args.action == "report":
+                return await analysis.report(settings, store, oracle)
+            return await analysis.scan(settings, store, oracle, hours=args.hours)
+        finally:
+            await oracle.aclose()
+
+    print(asyncio.run(go()))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="arb", description="Marketplace arbitrage pipeline.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -201,6 +225,14 @@ def build_parser() -> argparse.ArgumentParser:
         "terapeak-login", help="Sign in to eBay once and save a Terapeak session."
     )
     p_terapeak.set_defaults(func=cmd_terapeak_login)
+
+    p_auc = sub.add_parser("auctions", help="Auction houses as a buy side (Simon Charles).")
+    p_auc.add_argument("action", choices=["backfill", "report", "scan"])
+    p_auc.add_argument("--auctions", type=int, default=30,
+                       help="backfill: how many recent auction ids to walk.")
+    p_auc.add_argument("--hours", type=float, default=24,
+                       help="scan: only lots ending within this many hours.")
+    p_auc.set_defaults(func=cmd_auctions)
 
     return parser
 

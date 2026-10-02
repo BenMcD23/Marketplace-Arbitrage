@@ -234,6 +234,31 @@ Integrations → Webhooks → New Webhook → Copy URL) and they are on; leave i
 blank and deals are only stored and shown in the dashboard. Each auction alert
 leads with the bid ceiling and a countdown to the close.
 
+## Auction houses as a buy side
+
+`houses/` asks a different question from the eBay scanner: is there money in
+buying IT at a UK auction house and selling it on eBay? It starts with
+[Simon Charles](https://simoncharles.com), whose pages embed every lot as JSON
+and whose closed auctions stay browsable with final hammer prices.
+
+```bash
+arb auctions backfill --auctions 40   # store IT lots from the 40 newest auctions
+arb auctions report                   # settle ended sales, then: would each sold lot have paid?
+arb auctions scan --hours 24          # max bids for open lots ending in the next 24h
+```
+
+Every figure is **landed cost**, not hammer. At Simon Charles that is VAT on
+the hammer, a 20% premium and a 5% internet fee (both plus VAT), a £2 lot fee
+(plus VAT), and postage (`AUCTION_POSTAGE_ESTIMATE`, default £8). A £60 hammer
+is ~£100 at your door.
+
+The report prices each lot at the site's *next bid* after the winning hammer:
+the least that could have won it. The winner may have been willing to pay
+more, so read the report as a best case. Lots with a stated fault are left
+out; "not tested" is not a fault, it is the normal state of an auction lot.
+
+Results of the first live test are in [docs/FINDINGS.md](docs/FINDINGS.md).
+
 ## Commands
 
 ```bash
@@ -247,6 +272,7 @@ arb watch --add "ps5" --max-price 250
 arb watch --remove 3
 arb test-alert             # post one fake deal to Discord to check the webhook
 arb terapeak-login         # optional: save an eBay session for Terapeak
+arb auctions backfill|report|scan   # auction houses as a buy side
 ```
 
 ## Configuration

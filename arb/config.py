@@ -207,6 +207,17 @@ class Settings(BaseSettings):
         default=50, description="Max auction price refreshes per run (1 API call each)."
     )
 
+    # --- Auction houses (buy side) --------------------------------------
+    auction_postage_estimate: float = Field(
+        default=8.0, description="Assumed house postage for a postal lot (£). SC starts at £4.99."
+    )
+    auction_collection_cost: float = Field(
+        default=0.0, description="Cost you put on collecting a collection-only lot (£)."
+    )
+    auction_request_delay_sec: float = Field(
+        default=1.0, description="Pause between requests to an auction house's site."
+    )
+
     # --- Discord alerts --------------------------------------------------
     discord_webhook_url: str | None = Field(
         default=None, description="Discord webhook to post deals to. Unset = no alerts."
